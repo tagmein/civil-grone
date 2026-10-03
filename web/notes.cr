@@ -913,6 +913,16 @@ function card block index [
  to bar
  get ui
  at button
+ call Columns [ function [
+  get editColumns
+  call [ get index ] [ get block ] false
+ ] ]
+ to columnsButton
+ get ui
+ at append
+ call [ get bar ] [ get columnsButton ]
+ get ui
+ at button
  call 'Add row' [ function [
   get addRow
   call [ get index ] [ get block ]
@@ -1114,6 +1124,40 @@ function index change [
 ]
 to commitDataset
 
+function index block insertRow [
+ get starry
+ at parseDataset
+ call [ get block, at body ]
+ to data
+ get starry
+ at openDatasetColumns
+ call [ get ui ] [ get data ] [ get insertRow ] [ function drafts [
+  get shell
+  at setStatus
+  call '' info
+  get commitDataset
+  call [ get index ] [ function fresh [
+   get starry
+   at applyDatasetColumns
+   call [ get fresh ] [ get drafts ]
+   get insertRow
+   is true
+   true [
+    get starry
+    at addDatasetRow
+    call [ get fresh ]
+    to rowIndex
+    set state datasetPick [ get block, at id ] [ get rowIndex ]
+   ]
+  ] ]
+ ] ] [ function message [
+  get shell
+  at setStatus
+  call [ get message ] error
+ ] ]
+]
+to editColumns
+
 function index block [
  get starry
  at parseDataset
@@ -1124,9 +1168,8 @@ function index block [
  at length
  is 0
  true [
-  get shell
-  at setStatus
-  call 'This dataset has no columns to fill.' error
+  get editColumns
+  call [ get index ] [ get block ] true
  ]
  false [
   get commitDataset
