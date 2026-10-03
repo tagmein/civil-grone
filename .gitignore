@@ -147,3 +147,6 @@ vite.config.ts.timestamp-*
 
 # Turbo Repo
 .turbo
+
+# Generated static files for Vercel (index.html, main.mjs, clipped crown.mjs)
+/public

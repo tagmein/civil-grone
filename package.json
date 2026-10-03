@@ -1,0 +1,14 @@
+{
+  "name": "civil-grone",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node ./crown server/dev.mcr",
+    "start:production": "node ./crown server/serve.mcr",
+    "build": "node scripts/build-web.mjs",
+    "test": "node --test"
+  }
+}
