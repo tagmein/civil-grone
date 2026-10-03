@@ -1,0 +1,3 @@
+[submodule "starryui"]
+	path = starryui
+	url = git@github.com:starryui/starryui.git
