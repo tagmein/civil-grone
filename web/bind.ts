@@ -1,9 +1,11 @@
 import { button } from "../starryui/packages/button/index.ts"
-import { codefield, field, input } from "../starryui/packages/field/index.ts"
+import { checkbox, codefield, field, input } from "../starryui/packages/field/index.ts"
+import { paintExamples, paintHome } from "./examples.ts"
 import { frame } from "../starryui/packages/frame/index.ts"
 import { column, row } from "../starryui/packages/layout/index.ts"
 import { loading } from "../starryui/packages/loading/index.ts"
 import { markdown } from "../starryui/packages/markdown/index.ts"
+import { attachMenu, menu } from "../starryui/packages/menu/index.ts"
 import { notice } from "../starryui/packages/notice/index.ts"
 import { split } from "../starryui/packages/split/index.ts"
 import { table } from "../starryui/packages/table/index.ts"
@@ -36,6 +38,15 @@ export function setOnError(handler: (message: string) => void) {
   const message = error instanceof Error ? error.message : String(error)
   handler(message)
  }
+}
+
+export function toggleFullscreen() {
+ const result = document.fullscreenElement
+  ? document.exitFullscreen()
+  : document.documentElement.requestFullscreen()
+ return result.catch((error) => {
+  reportError(error)
+ })
 }
 
 async function callCrown(fn: unknown, ...args: unknown[]) {
@@ -88,6 +99,7 @@ export function shell(theme = themeMidnight) {
 
 export function createUi(theme = themeMidnight) {
  const themedButton = applyTheme(theme, button)
+ const themedCheck = applyTheme(theme, checkbox)
  const themedColumn = applyTheme(theme, column)
  const themedRow = applyTheme(theme, row)
  const themedFrame = applyTheme(theme, frame)
@@ -101,8 +113,63 @@ export function createUi(theme = themeMidnight) {
  const themedInput = applyTheme(theme, input)
  const themedCode = applyTheme(theme, codefield)
  const themedMarkdown = applyTheme(theme, markdown)
+ const themedMenu = applyTheme(theme, menu)
  const themedLoading = applyTheme(theme, loading)
  const themedTray = applyTheme(theme, tray)
+ const liveMenus: { anchor: HTMLElement; instance: { element: HTMLElement; isOpen: boolean; close(): void } }[] = []
+ let menuListening = false
+
+ function pruneMenus() {
+  for (let index = liveMenus.length - 1; index >= 0; index -= 1) {
+   const entry = liveMenus[index]
+   if (!entry.anchor.isConnected) {
+    if (entry.instance.isOpen) {
+     entry.instance.close()
+    }
+    liveMenus.splice(index, 1)
+   }
+  }
+ }
+
+ function closeOpenMenus(except?: { close(): void }) {
+  for (const entry of liveMenus) {
+   if (entry.instance !== except && entry.instance.isOpen) {
+    entry.instance.close()
+   }
+  }
+ }
+
+ function ensureMenuListeners() {
+  if (menuListening) {
+   return
+  }
+  menuListening = true
+  document.addEventListener("click", (event) => {
+   const target = event.target
+   if (!(target instanceof Node)) {
+    return
+   }
+   for (const entry of liveMenus) {
+    if (!entry.instance.isOpen) {
+     continue
+    }
+    if (entry.instance.element.contains(target) || entry.anchor.contains(target)) {
+     continue
+    }
+    entry.instance.close()
+   }
+  }, true)
+  document.addEventListener("keydown", (event) => {
+   if (event.key !== "Escape") {
+    return
+   }
+   if (!liveMenus.some((entry) => entry.instance.isOpen)) {
+    return
+   }
+   event.stopPropagation()
+   closeOpenMenus()
+  })
+ }
 
  return {
   append(parent: HTMLElement, child: HTMLElement) {
@@ -115,6 +182,12 @@ export function createUi(theme = themeMidnight) {
     traits.push(withClick(() => void guard(onClick)()))
    }
    return themedButton.add(...traits)()
+  },
+  check(checked: boolean, onChange?: unknown) {
+   return themedCheck.add(
+    withValue(checked ? "true" : "false"),
+    withOnInput((next) => void guard(onChange)(next)),
+   )()
   },
   clear(parent: HTMLElement) {
    parent.replaceChildren()
@@ -154,6 +227,7 @@ export function createUi(theme = themeMidnight) {
    const element = themedFrame()
    element.style.height = "auto"
    element.style.marginBottom = "var(--dimension3)"
+   element.style.overflow = "visible"
    return element
   },
   heading(text: string) {
@@ -167,8 +241,65 @@ export function createUi(theme = themeMidnight) {
     withOnInput((next) => void guard(onInput)(next)),
    )()
   },
+  nameInput(value: string, onInput?: unknown) {
+   const element = themedInput.add(
+    withValue(value ?? ""),
+    withOnInput((next) => void guard(onInput)(next)),
+   )()
+   element.style.flex = "1 1 10rem"
+   element.style.maxWidth = "16rem"
+   element.style.minWidth = "8rem"
+   element.style.width = "auto"
+   return element
+  },
   loading(text: string) {
    return themedLoading.add(withTextContent(text))()
+  },
+  menu(anchor: HTMLElement, entries: unknown) {
+   pruneMenus()
+   const items = Array.isArray(entries) ? entries as { id?: string; label?: string; action?: unknown }[] : []
+   const instance = themedMenu({
+    content(container) {
+     container.setAttribute("role", "menu")
+     for (const item of items) {
+      const row = document.createElement("div")
+      row.setAttribute("role", "menuitem")
+      row.textContent = item.id === "fullscreen"
+       ? (document.fullscreenElement ? "Exit fullscreen" : "Fullscreen")
+       : String(item.label ?? "")
+      row.addEventListener("click", () => {
+       if (item.id === "fullscreen") {
+        void toggleFullscreen()
+       }
+       instance.close()
+       if (item.id !== "fullscreen") {
+        void guard(item.action)()
+       }
+      })
+      container.append(row)
+     }
+    },
+   })
+   const open = instance.open.bind(instance)
+   const close = instance.close.bind(instance)
+   instance.open = () => {
+    closeOpenMenus(instance)
+    open()
+    anchor.setAttribute("aria-expanded", "true")
+   }
+   instance.close = () => {
+    if (!instance.isOpen) {
+     return
+    }
+    close()
+    anchor.setAttribute("aria-expanded", "false")
+   }
+   anchor.setAttribute("aria-haspopup", "menu")
+   anchor.setAttribute("aria-expanded", "false")
+   attachMenu(anchor, instance)
+   ensureMenuListeners()
+   liveMenus.push({ anchor, instance })
+   return anchor
   },
   markdown(source: string) {
    return themedMarkdown({ source: source ?? "" })
@@ -176,6 +307,21 @@ export function createUi(theme = themeMidnight) {
   notice(tone: string, text: string) {
    const allowed = tone === "error" || tone === "empty" ? tone : "info"
    return themedNotice({ tone: allowed, text })
+  },
+  pillar() {
+   const element = document.createElement("span")
+   element.setAttribute("aria-hidden", "true")
+   element.style.alignSelf = "stretch"
+   element.style.backgroundColor = "var(--theme0)"
+   element.style.borderTop = "1px solid var(--theme4)"
+   element.style.borderRight = "1px solid var(--theme4)"
+   element.style.borderBottom = "1px solid var(--theme4)"
+   element.style.borderLeft = "none"
+   element.style.boxSizing = "border-box"
+   element.style.flex = "0 0 var(--dimension3)"
+   element.style.marginLeft = "-1px"
+   element.style.width = "var(--dimension3)"
+   return element
   },
   row() {
    const element = themedRow()
@@ -187,6 +333,31 @@ export function createUi(theme = themeMidnight) {
   },
   spacer() {
    return traySpacer(theme)
+  },
+  stepBar() {
+   const element = themedRow()
+   element.style.flexGrow = "0"
+   element.style.flexWrap = "nowrap"
+   element.style.alignItems = "stretch"
+   element.style.gap = "0"
+   element.style.overflow = "visible"
+   element.style.padding = "0"
+   return element
+  },
+  stepTools() {
+   const element = themedRow()
+   element.style.flex = "1 1 auto"
+   element.style.minWidth = "0"
+   element.style.gap = "var(--dimension2)"
+   element.style.alignItems = "center"
+   element.style.padding = "var(--dimension2)"
+   return element
+  },
+  stepError(id: string, message: string) {
+   const element = themedNotice({ tone: "error", text: message })
+   element.setAttribute("data-step-error", String(id))
+   element.style.margin = "0 var(--dimension2) var(--dimension2)"
+   return element
   },
   split(direction: "row" | "column", ratio: number) {
    const instance = themedSplit({ direction, ratio })
@@ -323,16 +494,22 @@ export function visibleRows(dataset: {
  columns?: { name: string }[]
  rows?: unknown[][]
  sort?: { column: string; direction: string }[]
- filters?: { column: string; op: string; value: string }[]
+ filters?: { column: string; op: string; value?: string; join?: string }[]
 }) {
  const columns = dataset?.columns ?? []
  let rows = (dataset?.rows ?? []).slice()
+ const groups = new Map<string, { op: string; value?: string; join?: string }[]>()
  for (const filter of dataset?.filters ?? []) {
-  const index = columns.findIndex((column) => column.name === filter.column)
+  const list = groups.get(filter.column) ?? []
+  list.push(filter)
+  groups.set(filter.column, list)
+ }
+ for (const [column, filters] of groups) {
+  const index = columns.findIndex((item) => item.name === column)
   if (index < 0) {
    continue
   }
-  rows = rows.filter((row) => matchFilter(row[index], filter.op, filter.value ?? ""))
+  rows = rows.filter((row) => matchColumn(row[index], filters))
  }
  const sort = dataset?.sort ?? []
  if (sort.length > 0) {
@@ -351,6 +528,24 @@ export function visibleRows(dataset: {
   })
  }
  return rows
+}
+
+function matchColumn(cell: unknown, filters: { op: string; value?: string; join?: string }[]) {
+ let matched: boolean | null = null
+ for (const filter of filters) {
+  if (filter.op !== "empty" && (filter.value ?? "") === "") {
+   continue
+  }
+  const next = matchFilter(cell, filter.op, filter.value ?? "")
+  if (matched == null) {
+   matched = next
+  } else if (filter.join === "or") {
+   matched = matched || next
+  } else {
+   matched = matched && next
+  }
+ }
+ return matched ?? true
 }
 
 function matchFilter(cell: unknown, op: string, value: string) {
@@ -381,6 +576,63 @@ function compareCells(left: unknown, right: unknown) {
   return left - right
  }
  return String(left ?? "").localeCompare(String(right ?? ""), undefined, { numeric: true })
+}
+
+const customersOrdersSql = `CREATE TABLE IF NOT EXISTS customers (
+ id INTEGER PRIMARY KEY,
+ name TEXT,
+ active INTEGER
+);
+CREATE TABLE IF NOT EXISTS orders (
+ id INTEGER PRIMARY KEY,
+ customer_id INTEGER,
+ total REAL
+);
+INSERT OR IGNORE INTO customers (id, name, active) VALUES
+ (1, 'Ada', 1),
+ (2, 'Grace', 1),
+ (3, 'Lin', 0);
+INSERT OR IGNORE INTO orders (id, customer_id, total) VALUES
+ (10, 1, 12.5),
+ (11, 1, 4),
+ (12, 2, 9);
+`
+
+const customersOrdersMatch = "SELECT id, name FROM customers WHERE active = 1"
+
+export function pipelineTemplates() {
+ return [
+  {
+   id: "blank",
+   title: "Blank",
+   detail: "Start with one empty markdown block.",
+   sampleSql: "",
+   tables: [] as string[],
+   match: "",
+   blocks() {
+    return [blankBlock("markdown")]
+   },
+  },
+  {
+   id: "customers-orders",
+   title: "Customers, then orders",
+   detail: "A Crown block reads the customers dataset and builds the next orders query.",
+   sampleSql: customersOrdersSql,
+   tables: ["customers", "orders"],
+   match: customersOrdersMatch,
+   blocks: pipelineBlocks,
+  },
+ ]
+}
+
+export function sampleForNote(note: { blocks?: { body?: string }[] } | null) {
+ const bodies = (note?.blocks ?? []).map((block) => block.body ?? "").join("\n")
+ return pipelineTemplates().find((template) => template.match && bodies.includes(template.match)) ?? null
+}
+
+export function sampleReady(tables: { name?: string }[] | null, template: { tables?: string[] }) {
+ const names = new Set((tables ?? []).map((table) => table.name))
+ return (template?.tables ?? []).every((name) => names.has(name))
 }
 
 export function pipelineBlocks() {
@@ -581,4 +833,78 @@ export function outputText(value: unknown) {
  } catch {
   return String(value)
  }
+}
+
+export function hideStepError(blockId: string) {
+ const id = String(blockId ?? "")
+ if (!id) {
+  return
+ }
+ const escaped = typeof CSS !== "undefined" && typeof CSS.escape === "function" ? CSS.escape(id) : id
+ document.querySelector(`[data-step-error="${escaped}"]`)?.remove()
+}
+
+export function retainStepErrors(
+ errors: Record<string, string> | null,
+ note: { blocks?: { id?: string }[] } | null,
+ bannerId: string,
+) {
+ const ids = new Set((note?.blocks ?? []).map((block) => String(block?.id ?? "")))
+ const next: Record<string, string> = {}
+ for (const [id, message] of Object.entries(errors ?? {})) {
+  if (ids.has(id) && message) {
+   next[id] = message
+  }
+ }
+ const banner = String(bannerId ?? "")
+ return {
+  errors: next,
+  bannerId: banner && next[banner] ? banner : "",
+ }
+}
+
+export function clearScreen(container: HTMLElement) {
+ container.removeAttribute("data-screen")
+ container.removeAttribute("data-demo")
+}
+
+export function renderExamples(
+ container: HTMLElement,
+ ui: Parameters<typeof paintExamples>[1],
+ onHome: unknown,
+ onList: unknown,
+ onOpen: unknown,
+ activeId: unknown,
+) {
+ paintExamples(container, ui, {
+  home() {
+   void guard(onHome)()
+  },
+  list() {
+   void guard(onList)()
+  },
+  open(id) {
+   void guard(onOpen)(id)
+  },
+ }, typeof activeId === "string" ? activeId : "")
+}
+
+export function renderHome(
+ container: HTMLElement,
+ ui: Parameters<typeof paintHome>[1],
+ onDatabases: unknown,
+ onNotes: unknown,
+ onExamples: unknown,
+) {
+ paintHome(container, ui, {
+  databases() {
+   void guard(onDatabases)()
+  },
+  notes() {
+   void guard(onNotes)()
+  },
+  examples() {
+   void guard(onExamples)()
+  },
+ })
 }

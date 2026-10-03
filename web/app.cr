@@ -14,6 +14,7 @@ to ui
 
 set state [ object [
  section databases
+ example ''
  connectionId ''
  connectionName 'No database'
  connections [ list ]
@@ -26,6 +27,8 @@ set state [ object [
  sqlText 'SELECT 1'
  notes [ list ]
  note null
+ stepErrors [ object ]
+ stepErrorBanner ''
  selectedIndex null
  selectedRow null
  draftName notes
@@ -54,6 +57,97 @@ point
 to notes
 
 function [
+ get ui
+ at dialog
+ call About
+ to about
+ get ui
+ at markdown
+ call 'Civil Grone is a local-first database and notebook.'
+ to lead
+ get ui
+ at append
+ call [ get about, at panel ] [ get lead ]
+ get ui
+ at markdown
+ call 'Databases opens a SQLite file on this machine or connects a Turso database. Browse tables, sort and filter rows, and run SQL.'
+ to databasesCopy
+ get ui
+ at append
+ call [ get about, at panel ] [ get databasesCopy ]
+ get ui
+ at markdown
+ call 'Notes live in the selected database. A note mixes markdown with SQL, Crown, and JavaScript blocks that pass datasets along a pipeline.'
+ to notesCopy
+ get ui
+ at append
+ call [ get about, at panel ] [ get notesCopy ]
+ get ui
+ at button
+ call Close [ function [
+  get about
+  at close
+  call
+ ] ]
+ to closeAbout
+ get ui
+ at append
+ call [ get about, at panel ] [ get closeAbout ]
+ get about
+ at open
+ call
+]
+to openAbout
+
+function [
+ get ui
+ at clear
+ call [ get shell, at main ]
+ get starry
+ at renderHome
+ call [ get shell, at main ] [ get ui ] [ function [
+  set state section databases
+  get render
+  call
+ ] ] [ function [
+  set state section notes
+  get render
+  call
+ ] ] [ function [
+  set state section examples
+  set state example ''
+  get render
+  call
+ ] ]
+]
+to renderHome
+
+function [
+ get ui
+ at clear
+ call [ get shell, at main ]
+ get starry
+ at renderExamples
+ call [ get shell, at main ] [ get ui ] [ function [
+  set state section home
+  set state example ''
+  get render
+  call
+ ] ] [ function [
+  set state section examples
+  set state example ''
+  get render
+  call
+ ] ] [ function id [
+  set state section examples
+  set state example [ get id ]
+  get render
+  call
+ ] ] [ get state, at example ]
+]
+to renderExamples
+
+function [
  get shell
  at setStatus
  call '' info
@@ -62,8 +156,32 @@ function [
  call [ get shell, at tray ]
  get ui
  at button
+ call Home [ function [
+  set state section home
+  set state example ''
+  get render
+  call
+ ] ]
+ to homeNav
+ get ui
+ at append
+ call [ get shell, at tray ] [ get homeNav ]
+ get ui
+ at button
  call 'Civil Grone'
  to homeButton
+ get ui
+ at menu
+ call [ get homeButton ] [ list [ object [
+  label About
+  action [ function [
+   get openAbout
+   call
+  ] ]
+ ] ] [ object [
+  id fullscreen
+  label Fullscreen
+ ] ] ]
  get ui
  at append
  call [ get shell, at tray ] [ get homeButton ]
@@ -91,6 +209,18 @@ function [
  call [ get shell, at tray ] [ get notesButton ]
  get ui
  at button
+ call Examples [ function [
+  set state section examples
+  set state example ''
+  get render
+  call
+ ] ]
+ to examplesButton
+ get ui
+ at append
+ call [ get shell, at tray ] [ get examplesButton ]
+ get ui
+ at button
  call [ template 'Database: %0' [ get state, at connectionName ] ] [ function [
   get openConnections
   call
@@ -104,36 +234,59 @@ function [
  call [ get shell, at tray ] [ get ui, at spacer, call ]
  get ui
  at button
- call 'New SQLite' [ function [
-  get openLocal
-  call
- ] ]
- to localButton
+ call New
+ to newButton
+ get ui
+ at menu
+ call [ get newButton ] [ list [ object [
+  label SQLite
+  action [ function [
+   get openLocal
+   call
+  ] ]
+ ] ] [ object [
+  label Turso
+  action [ function [
+   get openRemote
+   call
+  ] ]
+ ] ] ]
  get ui
  at append
- call [ get shell, at tray ] [ get localButton ]
- get ui
- at button
- call Turso [ function [
-  get openRemote
-  call
- ] ]
- to remoteButton
- get ui
- at append
- call [ get shell, at tray ] [ get remoteButton ]
+ call [ get shell, at tray ] [ get newButton ]
+ get starry
+ at clearScreen
+ call [ get shell, at main ]
  get state
  at section
- is databases
+ is home
  true [
-  get databases
-  at render
+  get renderHome
   call
  ]
  false [
-  get notes
-  at render
-  call
+  get state
+  at section
+  is examples
+  true [
+   get renderExamples
+   call
+  ]
+  false [
+   get state
+   at section
+   is databases
+   true [
+    get databases
+    at render
+    call
+   ]
+   false [
+    get notes
+    at render
+    call
+   ]
+  ]
  ]
 ]
 to render

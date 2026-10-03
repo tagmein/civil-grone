@@ -239,36 +239,73 @@ function normalizeFilters(filters, table) {
   return filters
     .filter((item) => table.columns.some((column) => column.name === item?.column))
     .filter((item) => ops.has(item.op))
-    .map((item) => ({ column: item.column, op: item.op, value: item.value == null ? "" : String(item.value) }))
+    .map((item) => {
+      const next = {
+        column: item.column,
+        op: item.op,
+        value: item.value == null ? "" : String(item.value),
+      }
+      if (item.join === "or" || item.join === "and") {
+        next.join = item.join
+      }
+      return next
+    })
+}
+
+function compileOne(filter) {
+  const ident = quoteIdent(filter.column)
+  if (filter.op === "empty") {
+    return { clause: `(${ident} IS NULL OR CAST(${ident} AS TEXT) = '')`, args: [] }
+  }
+  if (filter.value === "") {
+    return null
+  }
+  if (filter.op === "eq") {
+    return { clause: `${ident} = ?`, args: [coerce(filter.value)] }
+  }
+  if (filter.op === "neq") {
+    return { clause: `${ident} != ?`, args: [coerce(filter.value)] }
+  }
+  if (filter.op === "gt") {
+    return { clause: `${ident} > ?`, args: [coerce(filter.value)] }
+  }
+  if (filter.op === "lt") {
+    return { clause: `${ident} < ?`, args: [coerce(filter.value)] }
+  }
+  if (filter.op === "contains") {
+    return {
+      clause: `CAST(${ident} AS TEXT) LIKE ? ESCAPE '\\'`,
+      args: [`%${filter.value.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_")}%`],
+    }
+  }
+  return null
 }
 
 function compileFilters(filters) {
+  const groups = new Map()
+  for (const filter of filters) {
+    const list = groups.get(filter.column) ?? []
+    list.push(filter)
+    groups.set(filter.column, list)
+  }
   const clauses = []
   const args = []
-  for (const filter of filters) {
-    const ident = quoteIdent(filter.column)
-    if (filter.op === "empty") {
-      clauses.push(`(${ident} IS NULL OR CAST(${ident} AS TEXT) = '')`)
-      continue
+  for (const group of groups.values()) {
+    const parts = []
+    for (const filter of group) {
+      const compiled = compileOne(filter)
+      if (!compiled) {
+        continue
+      }
+      if (parts.length === 0) {
+        parts.push(compiled.clause)
+      } else {
+        parts.push(filter.join === "or" ? "OR" : "AND", compiled.clause)
+      }
+      args.push(...compiled.args)
     }
-    if (filter.value === "") {
-      continue
-    }
-    if (filter.op === "eq") {
-      clauses.push(`${ident} = ?`)
-      args.push(coerce(filter.value))
-    } else if (filter.op === "neq") {
-      clauses.push(`${ident} != ?`)
-      args.push(coerce(filter.value))
-    } else if (filter.op === "gt") {
-      clauses.push(`${ident} > ?`)
-      args.push(coerce(filter.value))
-    } else if (filter.op === "lt") {
-      clauses.push(`${ident} < ?`)
-      args.push(coerce(filter.value))
-    } else if (filter.op === "contains") {
-      clauses.push(`CAST(${ident} AS TEXT) LIKE ? ESCAPE '\\'`)
-      args.push(`%${filter.value.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_")}%`)
+    if (parts.length > 0) {
+      clauses.push(`(${parts.join(" ")})`)
     }
   }
   return { clauses, args }

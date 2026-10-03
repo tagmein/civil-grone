@@ -11,10 +11,12 @@ const pages = {
   "/": "index.html",
   "/index.html": "index.html",
   "/starry.mjs": "starry.mjs",
+  "/favicon.ico": "favicon.ico",
 }
 
 const types = {
   ".html": "text/html; charset=utf-8",
+  ".ico": "image/x-icon",
   ".mjs": "text/javascript; charset=utf-8",
   ".cr": "text/plain; charset=utf-8",
 }

@@ -35,6 +35,7 @@ await esbuild.build({
 await fs.mkdir(publicDir, { recursive: true })
 await fs.copyFile(path.join(webDir, "index.html"), path.join(publicDir, "index.html"))
 await fs.copyFile(path.join(webDir, "starry.mjs"), path.join(publicDir, "starry.mjs"))
+await fs.copyFile(path.join(webDir, "favicon.ico"), path.join(publicDir, "favicon.ico"))
 const source = await fs.readFile(path.join(root, "crown"), "utf8")
 await fs.writeFile(path.join(publicDir, "crown.mjs"), clipCrownSource(source))
 const entries = await fs.readdir(webDir)

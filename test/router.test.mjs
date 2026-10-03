@@ -101,6 +101,10 @@ test("dev server serves the page, crown module, and api", async () => {
     assert.equal(page.status, 200)
     assert.match(html, /import\("\/crown\.mjs"\)/)
     assert.match(html, /runFile\("\/app\.cr"\)/)
+    assert.match(html, /href="\/favicon\.ico"/)
+    const icon = await fetch(`${base}/favicon.ico`)
+    assert.equal(icon.status, 200)
+    assert.equal(icon.headers.get("content-type"), "image/x-icon")
     const moduleResponse = await fetch(`${base}/crown.mjs`)
     const moduleText = await moduleResponse.text()
     assert.equal(moduleResponse.headers.get("cache-control"), "no-cache")
@@ -201,6 +205,37 @@ INSERT INTO orders (id, customer_id, total) VALUES (10, 1, 5), (11, 2, 9);`,
     assert.equal(grid.editable, true)
     assert.match(grid.sourceSql, /ORDER BY "name" asc/)
     assert.equal(grid.rows[0][1], "Ada")
+
+    const ranged = await request("databases/rows", {
+      method: "POST",
+      body: {
+        connectionId: connection.id,
+        table: "orders",
+        filters: [
+          { column: "total", op: "gt", value: "4" },
+          { column: "total", op: "lt", value: "9", join: "and" },
+        ],
+      },
+    })
+    assert.equal(ranged.status, 200)
+    assert.deepEqual(JSON.parse(ranged.body).rows.map((row) => row[2]), [5])
+
+    const either = await request("databases/rows", {
+      method: "POST",
+      body: {
+        connectionId: connection.id,
+        table: "customers",
+        filters: [
+          { column: "name", op: "eq", value: "Ada" },
+          { column: "name", op: "eq", value: "Grace", join: "or" },
+        ],
+      },
+    })
+    assert.equal(either.status, 200)
+    assert.deepEqual(
+      JSON.parse(either.body).rows.map((row) => row[1]).sort(),
+      ["Ada", "Grace"]
+    )
 
     const renamed = await request("databases/mutate", {
       method: "POST",

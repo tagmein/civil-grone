@@ -72,7 +72,7 @@ function [
  get ui
  at button
  call Pipeline [ function [
-  get newPipeline
+  get chooseTemplate
   call
  ] ]
  to pipelineButton
@@ -124,6 +124,16 @@ function id [
  call
  get paintNote
  call
+ get starry
+ at sampleForNote
+ call [ get loaded ]
+ to sample
+ get sample
+ is null
+ false [
+  get offerSample
+  call [ get sample ]
+ ]
 ]
 to openNote
 
@@ -166,17 +176,70 @@ function [
 to newNote
 
 function [
+ get ui
+ at dialog
+ call 'New pipeline'
+ to picker
+ get ui
+ at notice
+ call info 'Choose a template. Sample templates can import their tables into this database.'
+ to intro
+ get ui
+ at append
+ call [ get picker, at panel ] [ get intro ]
+ get starry
+ at pipelineTemplates
+ call
+ each [ function template [
+  get ui
+  at column
+  call
+  to choice
+  get ui
+  at button
+  call [ get template, at title ] [ function [
+   get picker
+   at close
+   call
+   get createFromTemplate
+   call [ get template ]
+  ] ]
+  to choiceButton
+  get ui
+  at append
+  call [ get choice ] [ get choiceButton ]
+  get ui
+  at text
+  call [ get template, at detail ]
+  to detailText
+  get ui
+  at append
+  call [ get choice ] [ get detailText ]
+  get ui
+  at append
+  call [ get picker, at panel ] [ get choice ]
+ ] ]
+ get picker
+ at open
+ call
+]
+to chooseTemplate
+
+function template [
  get starry
  at id
  call
  to noteId
- get starry
- at pipelineBlocks
+ get template
+ at blocks
  call
  to blocks
+ get template
+ at title
+ to title
  set state note [ object [
   id [ get noteId ]
-  title Pipeline
+  title [ get title ]
   blocks [ get blocks ]
  ] ]
  get saveNote
@@ -185,10 +248,85 @@ function [
  call
  get paintNote
  call
+ get template
+ at sampleSql
+ to sampleSql
+ get sampleSql
+ is ''
+ false [
+  get offerSample
+  call [ get template ]
+ ]
 ]
-to newPipeline
+to createFromTemplate
+
+function template [
+ get starry
+ at api
+ call 'databases/schema' [ object [
+  connectionId [ get state, at connectionId ]
+ ] ]
+ at tables
+ to tables
+ get starry
+ at sampleReady
+ call [ get tables ] [ get template ]
+ to ready
+ get ready
+ is true
+ false [
+  get ui
+  at dialog
+  call 'Import sample data'
+  to importer
+  get ui
+  at notice
+  call info 'This sample queries tables that are not in the current database. Import the sample rows before running the pipeline.'
+  to warning
+  get ui
+  at append
+  call [ get importer, at panel ] [ get warning ]
+  get ui
+  at button
+  call 'Import sample' [ function [
+   get starry
+   at api
+   call 'databases/query' [ object [
+    connectionId [ get state, at connectionId ]
+    sql [ get template, at sampleSql ]
+   ] ]
+   get importer
+   at close
+   call
+   get shell
+   at setStatus
+   call 'Sample tables imported. Run the pipeline again.' info
+  ] ]
+  to importButton
+  get ui
+  at append
+  call [ get importer, at panel ] [ get importButton ]
+  get ui
+  at button
+  call 'Not now' [ function [
+   get importer
+   at close
+   call
+  ] ]
+  to laterButton
+  get ui
+  at append
+  call [ get importer, at panel ] [ get laterButton ]
+  get importer
+  at open
+  call
+ ]
+]
+to offerSample
 
 function [
+ get syncStepErrors
+ call
  get ui
  at clear
  call [ get state, at notePane ]
@@ -292,25 +430,36 @@ function block index [
  call
  to card
  get ui
- at row
+ at stepBar
  call
  to bar
+ get ui
+ at pillar
+ call
+ to marker
+ get ui
+ at append
+ call [ get bar ] [ get marker ]
+ get ui
+ at stepTools
+ call
+ to tools
  get ui
  at text
  call [ get block, at kind ]
  to kindLabel
  get ui
  at append
- call [ get bar ] [ get kindLabel ]
+ call [ get tools ] [ get kindLabel ]
  get ui
- at input
+ at nameInput
  call [ get block, at name ] [ function value [
   set block name [ get value ]
  ] ]
  to nameInput
  get ui
  at append
- call [ get bar ] [ get nameInput ]
+ call [ get tools ] [ get nameInput ]
  get ui
  at button
  call Up [ function [
@@ -320,7 +469,7 @@ function block index [
  to upButton
  get ui
  at append
- call [ get bar ] [ get upButton ]
+ call [ get tools ] [ get upButton ]
  get ui
  at button
  call Down [ function [
@@ -330,7 +479,7 @@ function block index [
  to downButton
  get ui
  at append
- call [ get bar ] [ get downButton ]
+ call [ get tools ] [ get downButton ]
  get ui
  at button
  call Run [ function [
@@ -341,7 +490,7 @@ function block index [
  to runButton
  get ui
  at append
- call [ get bar ] [ get runButton ]
+ call [ get tools ] [ get runButton ]
  get ui
  at button
  call 'Run from here' [ function [
@@ -352,7 +501,7 @@ function block index [
  to fromButton
  get ui
  at append
- call [ get bar ] [ get fromButton ]
+ call [ get tools ] [ get fromButton ]
  get ui
  at button
  call Remove [ function [
@@ -362,10 +511,28 @@ function block index [
  to removeButton
  get ui
  at append
- call [ get bar ] [ get removeButton ]
+ call [ get tools ] [ get removeButton ]
+ get ui
+ at append
+ call [ get bar ] [ get tools ]
  get ui
  at append
  call [ get card ] [ get bar ]
+ get state
+ at stepErrors
+ at [ get block, at id ]
+ to stepMessage
+ get stepMessage
+ is undefined
+ false [
+  get ui
+  at stepError
+  call [ get block, at id ] [ get stepMessage ]
+  to stepNotice
+  get ui
+  at append
+  call [ get card ] [ get stepNotice ]
+ ]
  get block
  at kind
  to kind
@@ -393,7 +560,8 @@ function block index [
    get ui
    at code
    call [ get block, at body ] [ function value [
-    set block body [ get value ]
+    get editBody
+    call [ get block ] [ get value ]
    ] ]
    to editor
    get ui
@@ -407,7 +575,8 @@ function block index [
     get ui
     at code
     call [ get block, at body ] [ function value [
-     set block body [ get value ]
+     get editBody
+     call [ get block ] [ get value ]
     ] ] [ function [
      get pipeline
      at runOne
@@ -488,6 +657,8 @@ function index sort [
  call [ get data ]
  to body
  set block body [ get body ]
+ get clearStepError
+ call [ get block ]
  get saveNote
  call
  get paintNote
@@ -511,6 +682,8 @@ function index filters [
  call [ get data ]
  to body
  set block body [ get body ]
+ get clearStepError
+ call [ get block ]
  get saveNote
  call
  get paintNote
@@ -595,62 +768,45 @@ function index [
  call
  to bar
  get ui
- at text
+ at button
  call Add
- to label
+ to addButton
+ get ui
+ at menu
+ call [ get addButton ] [ list [ object [
+  label Markdown
+  action [ function [
+   get addKind
+   call [ get index ] markdown
+  ] ]
+ ] ] [ object [
+  label Crown
+  action [ function [
+   get addKind
+   call [ get index ] crown
+  ] ]
+ ] ] [ object [
+  label JavaScript
+  action [ function [
+   get addKind
+   call [ get index ] javascript
+  ] ]
+ ] ] [ object [
+  label SQL
+  action [ function [
+   get addKind
+   call [ get index ] sql
+  ] ]
+ ] ] [ object [
+  label Dataset
+  action [ function [
+   get addKind
+   call [ get index ] dataset
+  ] ]
+ ] ] ]
  get ui
  at append
- call [ get bar ] [ get label ]
- get ui
- at button
- call Markdown [ function [
-  get addKind
-  call [ get index ] markdown
- ] ]
- to markdownButton
- get ui
- at append
- call [ get bar ] [ get markdownButton ]
- get ui
- at button
- call Crown [ function [
-  get addKind
-  call [ get index ] crown
- ] ]
- to crownButton
- get ui
- at append
- call [ get bar ] [ get crownButton ]
- get ui
- at button
- call JavaScript [ function [
-  get addKind
-  call [ get index ] javascript
- ] ]
- to jsButton
- get ui
- at append
- call [ get bar ] [ get jsButton ]
- get ui
- at button
- call SQL [ function [
-  get addKind
-  call [ get index ] sql
- ] ]
- to sqlButton
- get ui
- at append
- call [ get bar ] [ get sqlButton ]
- get ui
- at button
- call Dataset [ function [
-  get addKind
-  call [ get index ] dataset
- ] ]
- to datasetButton
- get ui
- at append
- call [ get bar ] [ get datasetButton ]
+ call [ get bar ] [ get addButton ]
  get ui
  at append
  call [ get state, at notePane ] [ get bar ]
@@ -684,6 +840,13 @@ function index delta [
 to move
 
 function index [
+ get state
+ at note
+ at blocks
+ at [ get index ]
+ to block
+ get clearStepError
+ call [ get block ]
  get starry
  at removeBlock
  call [ get state, at note, at blocks ] [ get index ]
@@ -694,8 +857,71 @@ function index [
 ]
 to drop
 
+function block value [
+ set block body [ get value ]
+ get clearStepError
+ call [ get block ]
+]
+to editBody
+
+function block message [
+ set state stepErrors [ get block, at id ] [ get message ]
+ set state stepErrorBanner [ get block, at id ]
+ get shell
+ at setStatus
+ call [ get message ] error
+]
+to showStepError
+
+function block [
+ get state
+ at stepErrors
+ at [ get block, at id ]
+ to prior
+ get prior
+ is undefined
+ false [
+  unset state stepErrors [ get block, at id ]
+  get starry
+  at hideStepError
+  call [ get block, at id ]
+  get state
+  at stepErrorBanner
+  is [ get block, at id ]
+  true [
+   set state stepErrorBanner ''
+   get shell
+   at setStatus
+   call '' info
+  ]
+ ]
+]
+to clearStepError
+
+function [
+ get starry
+ at retainStepErrors
+ call [ get state, at stepErrors ] [ get state, at note ] [ get state, at stepErrorBanner ]
+ to kept
+ set state stepErrors [ get kept, at errors ]
+ get kept
+ at bannerId
+ to nextBanner
+ get nextBanner
+ is [ get state, at stepErrorBanner ]
+ false [
+  set state stepErrorBanner [ get nextBanner ]
+  get shell
+  at setStatus
+  call '' info
+ ]
+]
+to syncStepErrors
+
 object [
  render [ get renderNotes ]
  paintNote [ get paintNote ]
  saveNote [ get saveNote ]
+ clearStepError [ get clearStepError ]
+ showStepError [ get showStepError ]
 ]

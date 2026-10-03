@@ -4,52 +4,67 @@ function index [
  at blocks
  at [ get index ]
  to block
- get starry
- at makeSql
- call [ get state, at connectionId ]
- to sqlFn
- get starry
- at bindingsBefore
- call [ get state, at note, at blocks ] [ get index ] [ get sqlFn ]
- to bindings
- get block
- at kind
- to kind
- get kind
- is sql
- true [
-  get sqlFn
-  call [ get block, at body ]
-  to output
-  set block output [ get output ]
- ]
- get kind
- is crown
- true [
+ set state stepOk true
+ try [
   get starry
-  at runUserCrown
-  call [ get block, at body ] [ get bindings ]
-  to output
-  set block output [ get output ]
- ]
- get kind
- is javascript
- true [
+  at makeSql
+  call [ get state, at connectionId ]
+  to sqlFn
   get starry
-  at runUserJavaScript
-  call [ get block, at body ] [ get bindings ]
-  to output
-  set block output [ get output ]
- ]
- get kind
- is dataset
- true [
-  get refreshDataset
+  at bindingsBefore
+  call [ get state, at note, at blocks ] [ get index ] [ get sqlFn ]
+  to bindings
+  get block
+  at kind
+  to kind
+  get kind
+  is sql
+  true [
+   get sqlFn
+   call [ get block, at body ]
+   to output
+   set block output [ get output ]
+  ]
+  get kind
+  is crown
+  true [
+   get starry
+   at runUserCrown
+   call [ get block, at body ] [ get bindings ]
+   to output
+   set block output [ get output ]
+  ]
+  get kind
+  is javascript
+  true [
+   get starry
+   at runUserJavaScript
+   call [ get block, at body ] [ get bindings ]
+   to output
+   set block output [ get output ]
+  ]
+  get kind
+  is dataset
+  true [
+   get refreshDataset
+   call [ get block ]
+  ]
+  get notes
+  at clearStepError
   call [ get block ]
+ ] [
+  get_error
+  to message
+  set state stepOk false
+  get notes
+  at showStepError
+  call [ get block ] [ get message ]
  ]
  get notes
  at paintNote
  call
+ get state
+ at stepOk
 ]
 to runOne
 
@@ -138,12 +153,17 @@ function [
  true [
   get runOne
   call [ get cursor ]
-  get cursor
-  add 1
-  to next
-  set state cursor [ get next ]
-  get loopRun
-  call
+  to continued
+  get continued
+  is true
+  true [
+   get cursor
+   add 1
+   to next
+   set state cursor [ get next ]
+   get loopRun
+   call
+  ]
  ]
 ]
 to loopRun
