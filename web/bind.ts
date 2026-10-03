@@ -756,6 +756,188 @@ export function editDatasetCell(
  return dataset
 }
 
+type DatasetColumn = { name?: string; type?: string; width?: number }
+
+type ColumnDraft = {
+ name: string
+ type: string
+ from: number
+}
+
+type DatasetSchema = {
+ columns?: DatasetColumn[]
+ rows?: unknown[][]
+ sort?: { column: string }[]
+ filters?: { column: string }[]
+}
+
+function columnDraftError(drafts: ColumnDraft[], inserting: boolean) {
+ if (inserting && drafts.length === 0) {
+  return "Add a column before adding a row."
+ }
+ const seen: string[] = []
+ for (const draft of drafts) {
+  const name = draft.name.trim()
+  if (!name) {
+   return "Every column needs a name."
+  }
+  if (seen.includes(name)) {
+   return `Column ${name} is already used.`
+  }
+  seen.push(name)
+ }
+ return ""
+}
+
+function pushColumnDraft(drafts: ColumnDraft[]) {
+ const used = new Set(drafts.map((draft) => draft.name.trim()))
+ let index = drafts.length + 1
+ let name = `column${index}`
+ while (used.has(name)) {
+  index += 1
+  name = `column${index}`
+ }
+ drafts.push({ name, type: "text", from: -1 })
+ return drafts
+}
+
+function remapColumnKey<T extends { column: string }>(items: T[] | undefined, rename: Map<string, string>) {
+ const next: T[] = []
+ for (const item of items ?? []) {
+  const name = rename.get(item.column)
+  if (!name) {
+   continue
+  }
+  next.push({ ...item, column: name })
+ }
+ return next
+}
+
+export function applyDatasetColumns(dataset: DatasetSchema, drafts: ColumnDraft[]) {
+ const previous = dataset?.columns ?? []
+ const rename = new Map<string, string>()
+ dataset.columns = (drafts ?? []).map((draft) => {
+  const name = String(draft?.name ?? "").trim()
+  const type = String(draft?.type ?? "").trim()
+  const from = typeof draft?.from === "number" ? draft.from : -1
+  const prior = from >= 0 ? previous[from] : undefined
+  if (prior?.name) {
+   rename.set(String(prior.name), name)
+  }
+  const column: DatasetColumn = prior ? { ...prior, name } : { name }
+  if (type) {
+   column.type = type
+  } else {
+   delete column.type
+  }
+  return column
+ })
+ dataset.rows = (dataset.rows ?? []).map((row) => {
+  const source = Array.isArray(row) ? row : []
+  return (drafts ?? []).map((draft) => {
+   const from = typeof draft?.from === "number" ? draft.from : -1
+   return from >= 0 ? source[from] ?? "" : ""
+  })
+ })
+ dataset.sort = remapColumnKey(dataset.sort, rename)
+ dataset.filters = remapColumnKey(dataset.filters, rename)
+ return dataset
+}
+
+type SchemaUi = {
+ dialog(title: string): { panel: HTMLElement; open(): void; close(): void }
+ column(): HTMLElement
+ row(): HTMLElement
+ field(label: string, value: string, onInput?: unknown): HTMLElement
+ button(label: string, onClick?: unknown): HTMLElement
+ notice(tone: string, text: string): HTMLElement
+ append(parent: HTMLElement, child: HTMLElement): unknown
+ clear(parent: HTMLElement): void
+}
+
+export function openDatasetColumns(
+ ui: SchemaUi,
+ dataset: DatasetSchema,
+ addRow: unknown,
+ onSave: unknown,
+ onError: unknown,
+) {
+ const inserting = addRow === true || addRow === 1
+ const drafts: ColumnDraft[] = (dataset?.columns ?? []).map((column, index) => ({
+  name: String(column?.name ?? ""),
+  type: String(column?.type ?? ""),
+  from: index,
+ }))
+ if (inserting && drafts.length === 0) {
+  pushColumnDraft(drafts)
+ }
+ const editor = ui.dialog("Columns")
+ const list = ui.column()
+ list.style.flexGrow = "0"
+ list.style.gap = "var(--dimension2)"
+ list.style.maxHeight = "50vh"
+ list.style.overflow = "auto"
+ ui.append(editor.panel, list)
+ const actions = ui.row()
+ actions.style.flexGrow = "0"
+ actions.style.padding = "0"
+ ui.append(actions, ui.button("Add column", () => {
+  pushColumnDraft(drafts)
+  paint()
+ }))
+ ui.append(actions, ui.button("Save", () => {
+  void commit()
+ }))
+ ui.append(editor.panel, actions)
+ function paint() {
+  ui.clear(list)
+  if (drafts.length === 0) {
+   ui.append(list, ui.notice("info", "Add a column. Each row stores one value per column."))
+  }
+  drafts.forEach((draft, index) => {
+   const line = ui.row()
+   line.style.flexGrow = "0"
+   line.style.flexWrap = "wrap"
+   line.style.padding = "0"
+   const name = ui.field("Name", draft.name, (value: string) => {
+    draft.name = value
+   })
+   name.style.flex = "1 1 8rem"
+   name.style.minWidth = "0"
+   name.style.width = "auto"
+   const type = ui.field("Type", draft.type, (value: string) => {
+    draft.type = value
+   })
+   type.style.flex = "0 1 7rem"
+   type.style.minWidth = "0"
+   type.style.width = "auto"
+   ui.append(line, name)
+   ui.append(line, type)
+   ui.append(line, ui.button("Remove", () => {
+    drafts.splice(index, 1)
+    paint()
+   }))
+   ui.append(list, line)
+  })
+ }
+ async function commit() {
+  const message = columnDraftError(drafts, inserting)
+  if (message) {
+   await guard(onError)(message)
+   return
+  }
+  const saved = drafts.map((draft) => ({
+   name: draft.name.trim(),
+   type: draft.type.trim(),
+   from: draft.from,
+  }))
+  editor.close()
+  await guard(onSave)(saved)
+ }
+ paint()
+ editor.open()
+}
+
 export function addDatasetRow(dataset: {
  columns?: { name?: string }[]
  rows?: unknown[][]
