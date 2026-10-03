@@ -6,7 +6,10 @@
 <title>Civil Grone</title>
 </head>
 <body>
-<script type="module" src="/crown.mjs"></script>
-<script type="module" src="/main.mjs"></script>
+<script type="module">
+globalThis.import = (specifier) => import(specifier)
+const { crown } = await import("/crown.mjs")
+await crown().runFile("/app.cr")
+</script>
 </body>
 </html>

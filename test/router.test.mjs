@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import fs from "fs/promises"
 import http from "http"
+import os from "os"
 import path from "path"
 import test from "node:test"
 import { clipCrownSource } from "../server/clip.mjs"
@@ -44,10 +45,10 @@ test("echo returns the method and path", async () => {
   assert.deepEqual(JSON.parse(result.body), { method: "POST", path: "echo" })
 })
 
-test("nested route notes/list", async () => {
-  const result = await request("notes/list")
-  assert.equal(result.status, 200)
-  assert.deepEqual(JSON.parse(result.body), { notes: [] })
+test("notes list requires a connection", async () => {
+  const result = await request("notes/list", { method: "POST", body: {} })
+  assert.equal(result.status, 400)
+  assert.equal(JSON.parse(result.body).error, "connectionId is required")
 })
 
 test("missing route is 404", async () => {
@@ -98,8 +99,8 @@ test("dev server serves the page, crown module, and api", async () => {
     const page = await fetch(`${base}/`)
     const html = await page.text()
     assert.equal(page.status, 200)
-    assert.match(html, /type="module" src="\/crown\.mjs"/)
-    assert.match(html, /type="module" src="\/main\.mjs"/)
+    assert.match(html, /import\("\/crown\.mjs"\)/)
+    assert.match(html, /runFile\("\/app\.cr"\)/)
     const moduleResponse = await fetch(`${base}/crown.mjs`)
     const moduleText = await moduleResponse.text()
     assert.equal(moduleResponse.headers.get("cache-control"), "no-cache")
@@ -129,6 +130,172 @@ test("production server caches crown.mjs and masks handler errors", async () => 
   } finally {
     await fs.unlink(fail)
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+  }
+})
+
+test("local database supports schema, rows, edits, and notes", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "grone-"))
+  process.env.GRONE_DATA_DIR = dataDir
+  try {
+    const created = await request("databases/create", {
+      method: "POST",
+      body: { kind: "local", name: "Notes" },
+    })
+    assert.equal(created.status, 200)
+    const connection = JSON.parse(created.body).connection
+    assert.equal(connection.kind, "local")
+    assert.equal(connection.hasToken, false)
+    assert.equal(JSON.parse(created.body).connection.authToken, undefined)
+
+    const listed = await request("databases/list")
+    assert.equal(listed.status, 200)
+    assert.equal(JSON.parse(listed.body).connections.length, 1)
+
+    const setup = await request("databases/query", {
+      method: "POST",
+      body: {
+        connectionId: connection.id,
+        sql: "INSERT INTO missing_table (id) VALUES (1)",
+      },
+    })
+    assert.equal(setup.status, 400)
+
+    const ready = await request("databases/query", {
+      method: "POST",
+      body: {
+        connectionId: connection.id,
+        sql: `CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT, active INTEGER);
+INSERT INTO customers (id, name, active) VALUES (1, 'Ada', 1), (2, 'Grace', 0);
+CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER, total INTEGER);
+INSERT INTO orders (id, customer_id, total) VALUES (10, 1, 5), (11, 2, 9);`,
+      },
+    })
+    assert.equal(ready.status, 200)
+    assert.equal(JSON.parse(ready.body).results.length, 4)
+
+    const schema = await request("databases/schema", {
+      method: "POST",
+      body: { connectionId: connection.id },
+    })
+    assert.equal(schema.status, 200)
+    const tables = JSON.parse(schema.body).tables
+    const customers = tables.find((table) => table.name === "customers")
+    assert.deepEqual(customers.primaryKey, ["id"])
+    assert.equal(customers.columns.find((column) => column.name === "name").type, "TEXT")
+
+    const rows = await request("databases/rows", {
+      method: "POST",
+      body: {
+        connectionId: connection.id,
+        table: "customers",
+        sort: [{ column: "name", direction: "asc" }],
+        filters: [{ column: "name", op: "contains", value: "Ada" }],
+        page: 0,
+        pageSize: 100,
+      },
+    })
+    assert.equal(rows.status, 200)
+    const grid = JSON.parse(rows.body)
+    assert.equal(grid.rows.length, 1)
+    assert.deepEqual(grid.columns.map((column) => column.name), ["id", "name", "active"])
+    assert.equal(grid.editable, true)
+    assert.match(grid.sourceSql, /ORDER BY "name" asc/)
+    assert.equal(grid.rows[0][1], "Ada")
+
+    const renamed = await request("databases/mutate", {
+      method: "POST",
+      body: {
+        connectionId: connection.id,
+        action: "update",
+        table: "customers",
+        column: "name",
+        value: "Ada Lovelace",
+        primaryKey: { id: 1 },
+      },
+    })
+    assert.equal(renamed.status, 200)
+
+    const inserted = await request("databases/mutate", {
+      method: "POST",
+      body: {
+        connectionId: connection.id,
+        action: "insert",
+        table: "customers",
+        row: { id: 3, name: "Edsger", active: 1 },
+      },
+    })
+    assert.equal(inserted.status, 200)
+
+    const quoted = await request("databases/rows", {
+      method: "POST",
+      body: { connectionId: connection.id, table: 'customers"; drop table customers; --' },
+    })
+    assert.equal(quoted.status, 404)
+
+    const ensured = await request("notes/ensure", {
+      method: "POST",
+      body: { connectionId: connection.id },
+    })
+    assert.equal(ensured.status, 200)
+    const withNotes = await request("databases/schema", {
+      method: "POST",
+      body: { connectionId: connection.id },
+    })
+    const names = JSON.parse(withNotes.body).tables.map((table) => table.name)
+    assert.ok(names.includes("grone_note"))
+    assert.ok(names.includes("grone_block"))
+
+    const saved = await request("notes/save", {
+      method: "POST",
+      body: {
+        connectionId: connection.id,
+        note: {
+          id: "note-1",
+          title: "Pipeline",
+          blocks: [
+            { id: "b1", kind: "markdown", name: "", body: "# Customers" },
+            {
+              id: "b2",
+              kind: "dataset",
+              name: "customers",
+              body: JSON.stringify({
+                columns: [{ name: "id", type: "INTEGER" }],
+                rows: [[1]],
+                sort: [{ column: "id", direction: "asc" }],
+                filters: [],
+                sourceSql: "SELECT id FROM customers",
+              }),
+            },
+          ],
+        },
+      },
+    })
+    assert.equal(saved.status, 200)
+    const note = JSON.parse(saved.body).note
+    assert.equal(note.blocks.length, 2)
+    assert.equal(note.blocks[1].kind, "dataset")
+    const dataset = JSON.parse(note.blocks[1].body)
+    assert.deepEqual(dataset.sort, [{ column: "id", direction: "asc" }])
+
+    const fetched = await request("notes/get", {
+      method: "POST",
+      body: { connectionId: connection.id, id: "note-1" },
+    })
+    assert.equal(JSON.parse(fetched.body).note.title, "Pipeline")
+
+    const removed = await request("notes/delete", {
+      method: "POST",
+      body: { connectionId: connection.id, id: "note-1" },
+    })
+    assert.equal(removed.status, 200)
+    const gone = await request("notes/get", {
+      method: "POST",
+      body: { connectionId: connection.id, id: "note-1" },
+    })
+    assert.equal(gone.status, 404)
+  } finally {
+    delete process.env.GRONE_DATA_DIR
+    await fs.rm(dataDir, { recursive: true, force: true })
   }
 })
 

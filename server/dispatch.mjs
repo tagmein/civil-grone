@@ -1,6 +1,7 @@
 import fs from "fs/promises"
 import path from "path"
 import { clipCrownSource } from "./clip.mjs"
+import { createDb } from "./libsql.mjs"
 
 const crownModules = new Map()
 
@@ -109,8 +110,10 @@ export async function handleApi(request, { production = false, root = process.cw
     headers: request.headers ?? {},
     body: request.body ?? null,
   }
+  const db = createDb(root)
   scope.set("request", crown().value(payload))
   scope.set("exists", crown().value(async (rel) => fileExists(serverDir, rel)))
+  scope.set("db", crown().value(db))
 
   // Crown's point walks the loaded module on a child scope and then drops that
   // scope, so handler errors never reach the router's try. Run the module here
@@ -129,6 +132,7 @@ export async function handleApi(request, { production = false, root = process.cw
     const absolute = path.resolve(serverDir, String(loadedRel))
     const child = crown(null, new Map(), path.dirname(absolute))
     child.set("request", crown().value(payload))
+    child.set("db", crown().value(db))
     const result = await fn(child)
     const error = result._check_error()
     if (error) {

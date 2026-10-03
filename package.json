@@ -6,9 +6,13 @@
     "node": ">=22"
   },
   "scripts": {
-    "start": "node ./crown server/dev.mcr",
-    "start:production": "node ./crown server/serve.mcr",
+    "start": "node scripts/build-web.mjs && node ./crown server/dev.mcr",
+    "start:production": "node scripts/build-web.mjs && node ./crown server/serve.mcr",
     "build": "node scripts/build-web.mjs",
     "test": "node --test"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.18.0",
+    "esbuild": "^0.28.2"
   }
 }

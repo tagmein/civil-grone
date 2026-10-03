@@ -2,5 +2,5 @@ get request
 at body
 to body
 get db
-at notesList
+at notesDelete
 call [ get body ]

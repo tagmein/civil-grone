@@ -10,12 +10,13 @@ const webDir = path.join(root, "web")
 const pages = {
   "/": "index.html",
   "/index.html": "index.html",
-  "/main.mjs": "main.mjs",
+  "/starry.mjs": "starry.mjs",
 }
 
 const types = {
   ".html": "text/html; charset=utf-8",
   ".mjs": "text/javascript; charset=utf-8",
+  ".cr": "text/plain; charset=utf-8",
 }
 
 let cachedCrown
@@ -91,6 +92,21 @@ async function handleRequest(req, res, production) {
       "cache-control": production ? "public, max-age=3600" : "no-cache",
     }
     res.writeHead(200, headers)
+    res.end(body)
+    return
+  }
+  if (req.method === "GET" && url.pathname.endsWith(".cr")) {
+    const name = path.basename(url.pathname)
+    if (name !== url.pathname.slice(1) || !name.endsWith(".cr")) {
+      res.writeHead(404, { "content-type": "text/plain; charset=utf-8" })
+      res.end("not found")
+      return
+    }
+    const body = await fs.readFile(path.join(webDir, name))
+    res.writeHead(200, {
+      "content-type": types[".cr"],
+      "cache-control": production ? "public, max-age=3600" : "no-cache",
+    })
     res.end(body)
     return
   }

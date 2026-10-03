@@ -2,5 +2,5 @@ get request
 at body
 to body
 get db
-at notesList
+at notesGet
 call [ get body ]
