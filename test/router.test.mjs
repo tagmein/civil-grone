@@ -384,6 +384,71 @@ INSERT INTO orders (id, customer_id, total) VALUES (10, 1, 5), (11, 2, 9);`,
       body: { connectionId: connection.id, id: "note-1" },
     })
     assert.equal(gone.status, 404)
+
+    const added = await request("databases/mutate", {
+      method: "POST",
+      body: {
+        connectionId: connection.id,
+        action: "addColumn",
+        table: "orders",
+        name: "paid",
+        type: "BOOLEAN",
+      },
+    })
+    assert.equal(added.status, 200)
+    const rejected = await request("databases/mutate", {
+      method: "POST",
+      body: {
+        connectionId: connection.id,
+        action: "addColumn",
+        table: "orders",
+        name: "total; drop table orders",
+        type: "TEXT",
+      },
+    })
+    assert.equal(rejected.status, 400)
+    const keptKey = await request("databases/mutate", {
+      method: "POST",
+      body: {
+        connectionId: connection.id,
+        action: "dropColumn",
+        table: "orders",
+        column: "id",
+      },
+    })
+    assert.equal(keptKey.status, 400)
+
+    const summarized = await request("databases/rows", {
+      method: "POST",
+      body: {
+        connectionId: connection.id,
+        table: "orders",
+        summaries: { total: "sum", customer_id: "avg", id: "count" },
+      },
+    })
+    assert.equal(summarized.status, 200)
+    const summary = JSON.parse(summarized.body).summary
+    assert.equal(summary.total, "Sum 14")
+    assert.equal(summary.customer_id, "Avg 1.5")
+    assert.equal(summary.id, "2T/0F")
+    assert.ok(JSON.parse(summarized.body).columns.some((column) => column.name === "paid"))
+
+    const dropped = await request("databases/mutate", {
+      method: "POST",
+      body: {
+        connectionId: connection.id,
+        action: "dropColumn",
+        table: "orders",
+        column: "paid",
+      },
+    })
+    assert.equal(dropped.status, 200)
+    const afterDrop = await request("databases/schema", {
+      method: "POST",
+      body: { connectionId: connection.id },
+    })
+    const orders = JSON.parse(afterDrop.body).tables.find((table) => table.name === "orders")
+    assert.equal(orders.columns.some((column) => column.name === "paid"), false)
   } finally {
     delete process.env.GRONE_DATA_DIR
     await fs.rm(dataDir, { recursive: true, force: true })

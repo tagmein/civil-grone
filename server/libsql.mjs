@@ -209,6 +209,11 @@ async function readRows(client, body) {
     args: [...where.args, pageSize, page * pageSize],
   })
   const packed = pack(result, pageSize)
+  const summaries = normalizeSummaries(body?.summaries, table)
+  const summary = {}
+  for (const [name, action] of Object.entries(summaries)) {
+    summary[name] = await columnSummaryValue(client, table.name, name, action, where)
+  }
   return ok({
     ...packed,
     columns: packed.columns.map((column) => {
@@ -226,7 +231,79 @@ async function readRows(client, body) {
     pageSize,
     primaryKey: table.primaryKey,
     editable: table.primaryKey.length > 0 && table.type === "table",
+    summary,
   })
+}
+
+function normalizeSummaries(summaries, table) {
+  if (!summaries || typeof summaries !== "object" || Array.isArray(summaries)) {
+    return {}
+  }
+  const allowed = new Set(["sum", "avg", "count"])
+  const next = {}
+  for (const [name, action] of Object.entries(summaries)) {
+    if (table.columns.some((column) => column.name === name) && allowed.has(action)) {
+      next[name] = action
+    }
+  }
+  return next
+}
+
+async function columnSummaryValue(client, tableName, column, action, where) {
+  const ident = quoteIdent(column)
+  const from = `FROM ${quoteIdent(tableName)}${where.clauses.length ? ` WHERE ${where.clauses.join(" AND ")}` : ""}`
+  if (action === "sum") {
+    const result = await client.execute({
+      sql: `SELECT COALESCE(SUM(${ident}), 0) AS v ${from}`,
+      args: where.args,
+    })
+    return `Sum ${formatNumber(cellValue(result.rows[0], "v", 0))}`
+  }
+  if (action === "avg") {
+    const result = await client.execute({
+      sql: `SELECT AVG(${ident}) AS v ${from}`,
+      args: where.args,
+    })
+    const value = cellValue(result.rows[0], "v", 0)
+    return value == null ? "Avg" : `Avg ${formatNumber(value)}`
+  }
+  if (action === "count") {
+    const result = await client.execute({
+      sql: `SELECT
+        SUM(CASE WHEN ${ident} IS NULL OR lower(CAST(${ident} AS TEXT)) IN ('', '0', 'false', 'f', 'no') THEN 0 ELSE 1 END) AS t,
+        SUM(CASE WHEN ${ident} IS NULL OR lower(CAST(${ident} AS TEXT)) IN ('', '0', 'false', 'f', 'no') THEN 1 ELSE 0 END) AS f
+        ${from}`,
+      args: where.args,
+    })
+    const t = Number(cellValue(result.rows[0], "t", 0) ?? 0)
+    const f = Number(cellValue(result.rows[0], "f", 1) ?? 0)
+    return `${t}T/${f}F`
+  }
+  return ""
+}
+
+function cellValue(row, name, index) {
+  if (!row) {
+    return null
+  }
+  if (row[name] != null) {
+    return row[name]
+  }
+  return row[index] ?? null
+}
+
+function formatNumber(value) {
+  if (typeof value === "bigint") {
+    return value.toString()
+  }
+  const number = Number(value ?? 0)
+  if (!Number.isFinite(number)) {
+    return String(value)
+  }
+  if (Number.isInteger(number)) {
+    return String(number)
+  }
+  return String(Math.round(number * 100) / 100)
 }
 
 function normalizeSort(sort, table) {
@@ -395,7 +472,56 @@ async function mutate(client, body) {
     })
     return ok({ ok: true })
   }
-  return fail(400, "action must be update, insert, or delete")
+  if (action === "addColumn" || action === "dropColumn") {
+    if (table.type !== "table") {
+      return fail(400, "views can't be changed")
+    }
+    const name = ident(action === "addColumn" ? body?.name : body?.column)
+    if (!name) {
+      return fail(400, "column name is required")
+    }
+    const exists = table.columns.some((column) => column.name.toLowerCase() === name.toLowerCase())
+    if (action === "addColumn") {
+      if (exists) {
+        return fail(400, "column already exists")
+      }
+      const type = columnType(body?.type)
+      if (!type) {
+        return fail(400, "type must be TEXT, INTEGER, REAL, BOOLEAN, NUMERIC, or BLOB")
+      }
+      try {
+        await client.execute(`ALTER TABLE ${quoteIdent(table.name)} ADD COLUMN ${quoteIdent(name)} ${type}`)
+      } catch (error) {
+        return fail(400, error.message)
+      }
+      return ok({ ok: true })
+    }
+    if (!exists) {
+      return fail(404, "column not found")
+    }
+    if (table.primaryKey.some((column) => column.toLowerCase() === name.toLowerCase())) {
+      return fail(400, "cannot remove a primary key column")
+    }
+    try {
+      await client.execute(`ALTER TABLE ${quoteIdent(table.name)} DROP COLUMN ${quoteIdent(name)}`)
+    } catch (error) {
+      return fail(400, error.message)
+    }
+    return ok({ ok: true })
+  }
+  return fail(400, "action must be update, insert, delete, addColumn, or dropColumn")
+}
+
+const columnTypes = new Set(["TEXT", "INTEGER", "REAL", "BLOB", "NUMERIC", "BOOLEAN"])
+
+function ident(value) {
+  const name = text(value)
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ? name : ""
+}
+
+function columnType(value) {
+  const type = text(value).toUpperCase()
+  return columnTypes.has(type) ? type : ""
 }
 
 async function ensureNotes(client) {

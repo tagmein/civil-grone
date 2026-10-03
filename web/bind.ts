@@ -12,6 +12,12 @@ import {
  writeSelectColumn,
  writeSelectFilter,
 } from "./dataset.ts"
+import {
+ columnSummary,
+ summaryOptions,
+ tableSummaries,
+ writeColumnSummary,
+} from "./summary.ts"
 import { button } from "../starryui/packages/button/index.ts"
 import { checkbox, codefield, field, input } from "../starryui/packages/field/index.ts"
 import { paintExamples, paintHome } from "./examples.ts"
@@ -308,6 +314,30 @@ export function createUi(theme = activeTheme) {
    }
    return themedButton.add(...traits)()
   },
+  choice(value: string, options: { value?: string; label?: string }[], onChange?: unknown) {
+   const element = document.createElement("select")
+   element.style.backgroundColor = "var(--theme0)"
+   element.style.border = "1px solid var(--theme8)"
+   element.style.boxSizing = "border-box"
+   element.style.color = "var(--themef)"
+   element.style.font = "inherit"
+   element.style.height = "var(--dimension4)"
+   element.style.padding = "0 var(--dimension2)"
+   const current = String(value ?? "")
+   for (const option of options ?? []) {
+    const item = document.createElement("option")
+    item.value = String(option?.value ?? "")
+    item.textContent = String(option?.label ?? option?.value ?? "")
+    if (item.value === current) {
+     item.selected = true
+    }
+    element.append(item)
+   }
+   element.addEventListener("change", () => {
+    void guard(onChange)(element.value)
+   })
+   return element
+  },
   check(checked: boolean, onChange?: unknown) {
    return themedCheck.add(
     withValue(checked ? "true" : "false"),
@@ -510,6 +540,20 @@ export function createUi(theme = activeTheme) {
    element.style.padding = "var(--dimension2)"
    return element
   },
+  line() {
+   const element = themedRow()
+   element.style.flexGrow = "0"
+   element.style.gap = "var(--dimension2)"
+   element.style.alignItems = "center"
+   element.style.padding = "0"
+   return element
+  },
+  grow(element: HTMLElement) {
+   element.style.flex = "1 1 auto"
+   element.style.justifyContent = "flex-start"
+   element.style.minWidth = "0"
+   return element
+  },
   spacer() {
    return traySpacer(activeTheme)
   },
@@ -611,6 +655,7 @@ export function createUi(theme = activeTheme) {
     selectedIndex: typeof config.selectedIndex === "number" ? config.selectedIndex : undefined,
     onSelectRow: (index) => void guard(config.onSelectRow)(index),
     onCellEdit: (row, columnName, value) => void guard(config.onCellEdit)(row, columnName, value),
+    summary: config.summary as Record<string, string> | undefined,
    })
   },
   tabs(items: { id: string; title: string }[], active: string, onSelect?: unknown) {
@@ -751,8 +796,14 @@ export function writeConnectionId(id: string) {
  }
 }
 
-export function schemaNodes(schema: { tables?: { name: string; columns: { name: string; type: string }[] }[] }) {
- return (schema?.tables ?? []).map((table) => ({
+export function schemaNodes(
+ schema: { tables?: { name: string; columns: { name: string; type: string }[] }[] },
+ tableName?: string,
+) {
+ const wanted = String(tableName ?? "")
+ const tables = schema?.tables ?? []
+ const shown = wanted ? tables.filter((table) => table.name === wanted) : tables
+ return shown.map((table) => ({
   id: table.name,
   label: table.name,
   expanded: true,
@@ -768,28 +819,24 @@ export function databaseNodes(
  tables: { name?: string }[] | undefined,
  activeId: string,
 ) {
- return (connections ?? []).map((connection) => {
-  const id = String(connection?.id ?? "")
-  const active = id !== "" && id === String(activeId ?? "")
-  const tableNodes = active
-   ? (tables ?? []).map((table) => ({
-     id: `table:${id}:${String(table?.name ?? "")}`,
-     label: String(table?.name ?? ""),
-    }))
-   : []
+ const id = String(activeId ?? "")
+ const active = id !== "" && (connections ?? []).some((connection) => String(connection?.id ?? "") === id)
+ if (!active) {
+  return []
+ }
+ return (tables ?? []).map((table) => {
+  const name = String(table?.name ?? "")
   return {
-   id: `db:${id}`,
-   label: String(connection?.name || "Database"),
-   expanded: active,
+   id: `table:${id}:${name}`,
+   label: name,
+   expanded: true,
    children: [
     {
-     id: `data:${id}`,
+     id: `data:${id}:${name}`,
      label: "Data",
-     expanded: active,
-     children: tableNodes,
     },
     {
-     id: `schema:${id}`,
+     id: `schema:${id}:${name}`,
      label: "Schema",
     },
    ],
@@ -799,18 +846,41 @@ export function databaseNodes(
 
 export function databaseSelection(view: string, connectionId: string, table: string) {
  const id = String(connectionId ?? "")
- if (!id) {
+ const name = String(table ?? "")
+ if (!id || !name) {
   return ""
  }
  if (view === "schema") {
-  return `schema:${id}`
+  return `schema:${id}:${name}`
  }
- const name = String(table ?? "")
- if (name) {
-  return `table:${id}:${name}`
- }
- return `data:${id}`
+ return `data:${id}:${name}`
 }
+
+export function summaryChoice(
+ ui: { choice(value: string, options: { value?: string; label?: string }[], onChange?: unknown): HTMLElement },
+ type: string,
+ value: string,
+ onChange: unknown,
+) {
+ const options = summaryOptions(type)
+ if (options.length === 0) {
+  return null
+ }
+ return ui.choice(value, options, onChange)
+}
+
+const columnTypeNames = ["TEXT", "INTEGER", "REAL", "BOOLEAN", "NUMERIC", "BLOB"]
+
+export function columnTypeChoice(
+ ui: { choice(value: string, options: { value?: string; label?: string }[], onChange?: unknown): HTMLElement },
+ value: string,
+ onChange: unknown,
+) {
+ const current = columnTypeNames.includes(String(value)) ? String(value) : "TEXT"
+ return ui.choice(current, columnTypeNames.map((type) => ({ value: type, label: type })), onChange)
+}
+
+export { columnSummary, summaryOptions, tableSummaries, writeColumnSummary }
 
 export function readDatabaseNode(value: string) {
  const text = String(value ?? "")
@@ -820,16 +890,13 @@ export function readDatabaseNode(value: string) {
  }
  const kind = text.slice(0, sep)
  const rest = text.slice(sep + 1)
- if (kind === "table") {
+ if (kind === "table" || kind === "data" || kind === "schema") {
   const split = rest.indexOf(":")
   return {
-   view: "data",
+   view: kind === "schema" ? "schema" : "data",
    connectionId: split < 0 ? rest : rest.slice(0, split),
    table: split < 0 ? "" : rest.slice(split + 1),
   }
- }
- if (kind === "schema") {
-  return { view: "schema", connectionId: rest, table: "" }
  }
  return { view: "data", connectionId: rest, table: "" }
 }

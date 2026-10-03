@@ -38,6 +38,8 @@ set state [ object [
  draftName notes
  draftUrl ''
  draftToken ''
+ columnName ''
+ columnType TEXT
 ] ]
 
 get starry
@@ -468,6 +470,10 @@ function [
  at connections
  each [ function item [
   get ui
+  at line
+  call
+  to line
+  get ui
   at button
   call [ get item, at name ] [ function [
    get picker
@@ -478,8 +484,49 @@ function [
   ] ]
   to choice
   get ui
+  at grow
+  call [ get choice ]
+  get ui
   at append
-  call [ get picker, at panel ] [ get choice ]
+  call [ get line ] [ get choice ]
+  get ui
+  at button
+  call Remove [ function [
+   get starry
+   at api
+   call 'databases/delete' [ object [
+    connectionId [ get item, at id ]
+   ] ]
+   get loadConnections
+   call
+   get state
+   at connectionId
+   is [ get item, at id ]
+   true [
+    set state connectionId ''
+    set state connectionName 'No database'
+    set state selectedTable ''
+    set state tables [ list ]
+    set state note null
+    get starry
+    at writeConnectionId
+    call ''
+   ]
+   get render
+   call
+   get picker
+   at close
+   call
+   get openConnections
+   call
+  ] ]
+  to removeButton
+  get ui
+  at append
+  call [ get line ] [ get removeButton ]
+  get ui
+  at append
+  call [ get picker, at panel ] [ get line ]
  ] ]
  get state
  at connections
