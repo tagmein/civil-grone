@@ -1,3 +1,17 @@
+import {
+ applySelect,
+ conflictView,
+ readBaseline,
+ readPinned,
+ selectColumnChecked,
+ selectColumnNames,
+ selectFilterOf,
+ selectOpLabel,
+ shiftConflictCursor,
+ stampBaseline,
+ writeSelectColumn,
+ writeSelectFilter,
+} from "./dataset.ts"
 import { button } from "../starryui/packages/button/index.ts"
 import { checkbox, codefield, field, input } from "../starryui/packages/field/index.ts"
 import { paintExamples, paintHome } from "./examples.ts"
@@ -13,14 +27,20 @@ import { tabs } from "../starryui/packages/tabs/index.ts"
 import {
  applyTheme,
  attachStyle,
- attachThemeVariables,
+ attachThemeFacetStyle,
  useThemeDimensions,
+ type StarryUITheme,
+ type StarryUIThemeFacet,
 } from "../starryui/packages/theme/index.ts"
+import { themeBrilliance } from "../starryui/packages/theme-brilliance/index.ts"
 import { themeMidnight } from "../starryui/packages/theme-midnight/index.ts"
+import { themeSandstone } from "../starryui/packages/theme-sandstone/index.ts"
 import { dialog } from "../starryui/packages/dialog/index.ts"
 import { tree } from "../starryui/packages/tree/index.ts"
 import { tray, traySpacer } from "../starryui/packages/tray/index.ts"
 import {
+ type StarryUIComponent,
+ type StarryUITraitConfig,
  withClick,
  withOnInput,
  withTextContent,
@@ -28,6 +48,17 @@ import {
 } from "../starryui/packages/traits/index.ts"
 
 export { themeMidnight }
+export {
+ applySelect,
+ conflictView,
+ selectColumnChecked,
+ selectColumnNames,
+ selectFilterOf,
+ selectOpLabel,
+ shiftConflictCursor,
+ writeSelectColumn,
+ writeSelectFilter,
+}
 
 let reportError = (error: unknown) => {
  console.error(error)
@@ -75,11 +106,104 @@ function guard(fn: unknown) {
  }
 }
 
-export function shell(theme = themeMidnight) {
- attachThemeVariables(document.body, theme.variables)
- attachStyle(theme, "body", theme.facets.body)
+const allThemes = [themeBrilliance, themeMidnight, themeSandstone]
+const themeNameStorageKey = "theme"
+let activeTheme = themeMidnight
+let bodyVariableStyle: HTMLStyleElement | undefined
+let bodyFacetStyle: HTMLStyleElement | undefined
+
+function preferredTheme() {
+ if (typeof localStorage === "undefined") {
+  return themeMidnight
+ }
+ const stored = localStorage.getItem(themeNameStorageKey)
+ return allThemes.find((item) => item.name === stored) ?? themeMidnight
+}
+
+function resolveTheme(theme: StarryUITheme) {
+ return allThemes.find((item) => item.name === theme.name) ?? theme
+}
+
+function liveTheme<T, C extends StarryUITraitConfig>(
+ component: StarryUIComponent<T, C>,
+): StarryUIComponent<T, C> {
+ return new Proxy(component, {
+  apply(_target, _thisArg, argArray) {
+   return Reflect.apply(applyTheme(activeTheme, component), undefined, argArray)
+  },
+  get(_target, property) {
+   const current = applyTheme(activeTheme, component)
+   const value = Reflect.get(current, property)
+   if (typeof value === "function") {
+    return value.bind(current)
+   }
+   return value
+  },
+ })
+}
+
+function paintBody(theme: StarryUITheme) {
+ const variables = theme.variables ?? {}
+ const variableText = `body {\n${Object.entries(variables)
+  .map(([name, value]) => ` --${name}: ${value};`)
+  .join("\n")}\n}`
+ if (!bodyVariableStyle) {
+  bodyVariableStyle = document.createElement("style")
+  document.head.appendChild(bodyVariableStyle)
+ }
+ bodyVariableStyle.textContent = variableText
+ bodyFacetStyle?.remove()
+ bodyFacetStyle = attachStyle(theme, "body", theme.facets.body)
+}
+
+function ensureThemeStyles(theme: StarryUITheme) {
+ for (const facet of Object.keys(theme.facets)) {
+  attachThemeFacetStyle(theme, facet as StarryUIThemeFacet)
+ }
+}
+
+function retargetThemeClasses(from: string, to: string, extras: readonly HTMLElement[] = []) {
+ if (from === to) {
+  return
+ }
+ const prefix = `theme-${from}-`
+ const visit = (element: Element) => {
+  for (const name of [...element.classList]) {
+   if (!name.startsWith(prefix)) {
+    continue
+   }
+   const facet = name.slice(prefix.length)
+   element.classList.remove(name)
+   element.classList.add(`theme-${to}-${facet}`)
+  }
+ }
+ for (const root of [document.body, ...extras]) {
+  visit(root)
+  root.querySelectorAll("[class*='theme-']").forEach(visit)
+ }
+}
+
+function applyAppTheme(theme: StarryUITheme, extras: readonly HTMLElement[] = []) {
+ const previousName = activeTheme.name
+ if (previousName === theme.name) {
+  return
+ }
+ activeTheme = theme
+ try {
+  localStorage.setItem(themeNameStorageKey, theme.name)
+ } catch (error) {
+  console.error(error)
+ }
+ paintBody(theme)
+ ensureThemeStyles(theme)
+ retargetThemeClasses(previousName, theme.name, extras)
+}
+
+export function shell(theme = preferredTheme()) {
+ activeTheme = resolveTheme(theme)
+ paintBody(activeTheme)
  useThemeDimensions.tiny()
- const ui = createUi(theme)
+ const ui = createUi(activeTheme)
  const trayElement = ui.tray()
  const status = document.createElement("div")
  const main = ui.column()
@@ -97,25 +221,26 @@ export function shell(theme = themeMidnight) {
  }
 }
 
-export function createUi(theme = themeMidnight) {
- const themedButton = applyTheme(theme, button)
- const themedCheck = applyTheme(theme, checkbox)
- const themedColumn = applyTheme(theme, column)
- const themedRow = applyTheme(theme, row)
- const themedFrame = applyTheme(theme, frame)
- const themedSplit = applyTheme(theme, split)
- const themedTabs = applyTheme(theme, tabs)
- const themedTree = applyTheme(theme, tree)
- const themedTable = applyTheme(theme, table)
- const themedNotice = applyTheme(theme, notice)
- const themedDialog = applyTheme(theme, dialog)
- const themedField = applyTheme(theme, field)
- const themedInput = applyTheme(theme, input)
- const themedCode = applyTheme(theme, codefield)
- const themedMarkdown = applyTheme(theme, markdown)
- const themedMenu = applyTheme(theme, menu)
- const themedLoading = applyTheme(theme, loading)
- const themedTray = applyTheme(theme, tray)
+export function createUi(theme = activeTheme) {
+ activeTheme = resolveTheme(theme)
+ const themedButton = liveTheme(button)
+ const themedCheck = liveTheme(checkbox)
+ const themedColumn = liveTheme(column)
+ const themedRow = liveTheme(row)
+ const themedFrame = liveTheme(frame)
+ const themedSplit = liveTheme(split)
+ const themedTabs = liveTheme(tabs)
+ const themedTree = liveTheme(tree)
+ const themedTable = liveTheme(table)
+ const themedNotice = liveTheme(notice)
+ const themedDialog = liveTheme(dialog)
+ const themedField = liveTheme(field)
+ const themedInput = liveTheme(input)
+ const themedCode = liveTheme(codefield)
+ const themedMarkdown = liveTheme(markdown)
+ const themedMenu = liveTheme(menu)
+ const themedLoading = liveTheme(loading)
+ const themedTray = liveTheme(tray)
  const liveMenus: { anchor: HTMLElement; instance: { element: HTMLElement; isOpen: boolean; close(): void } }[] = []
  let menuListening = false
 
@@ -220,6 +345,60 @@ export function createUi(theme = themeMidnight) {
     label,
     content(container) {
      container.append(control)
+    },
+   })
+  },
+  columnField(label: string, type: string, value: string, onInput?: unknown) {
+   const kind = columnInputKind(type)
+   const declared = String(type ?? "").trim()
+   function caption() {
+    const span = document.createElement("span")
+    span.textContent = String(label ?? "")
+    if (declared) {
+     const hint = document.createElement("small")
+     hint.textContent = declared
+     hint.style.marginLeft = "0.4rem"
+     hint.style.opacity = "0.65"
+     span.append(hint)
+    }
+    return span
+   }
+   if (kind === "boolean") {
+    const checked = value === "true" || value === "1" || value === "on"
+    const control = themedCheck.add(
+     withValue(checked ? "true" : "false"),
+     withOnInput((next) => void guard(onInput)(next)),
+    )()
+    return themedField({
+     content(container) {
+      container.append(caption(), control)
+     },
+    })
+   }
+   const control = themedInput.add(
+    withValue(value ?? ""),
+    withOnInput((next) => void guard(onInput)(next)),
+   )()
+   if (control instanceof HTMLInputElement) {
+    if (kind === "integer") {
+     control.inputMode = "numeric"
+     control.type = "number"
+     control.step = "1"
+    } else if (kind === "real") {
+     control.inputMode = "decimal"
+     control.type = "number"
+     control.step = "any"
+    } else if (kind === "date") {
+     control.type = "date"
+    } else if (kind === "datetime") {
+     control.type = "datetime-local"
+    } else if (kind === "time") {
+     control.type = "time"
+    }
+   }
+   return themedField({
+    content(container) {
+     container.append(caption(), control)
     },
    })
   },
@@ -332,7 +511,57 @@ export function createUi(theme = themeMidnight) {
    return element
   },
   spacer() {
-   return traySpacer(theme)
+   return traySpacer(activeTheme)
+  },
+  themeSwitcher(onChange?: unknown) {
+   pruneMenus()
+   const anchor = themedButton.add(withTextContent(activeTheme.name))()
+   if (anchor instanceof HTMLButtonElement) {
+    anchor.type = "button"
+   }
+   const instance = themedMenu.add({
+    type: "onSelect",
+    onSelect(selectedThemeName) {
+     const selected = allThemes.find((item) => item.name === selectedThemeName)
+     if (!selected || selected.name === activeTheme.name) {
+      return
+     }
+     applyAppTheme(selected, liveMenus.map((entry) => entry.instance.element).concat(instance.element, anchor))
+     anchor.textContent = selected.name
+     void guard(onChange)()
+    },
+   })({
+    content(container) {
+     container.setAttribute("role", "menu")
+     for (const item of allThemes) {
+      const pickTheme = document.createElement("div")
+      pickTheme.setAttribute("role", "menuitem")
+      pickTheme.textContent = item.name
+      pickTheme.setAttribute("data-value", item.name)
+      container.appendChild(pickTheme)
+     }
+    },
+   })
+   const open = instance.open.bind(instance)
+   const close = instance.close.bind(instance)
+   instance.open = () => {
+    closeOpenMenus(instance)
+    open()
+    anchor.setAttribute("aria-expanded", "true")
+   }
+   instance.close = () => {
+    if (!instance.isOpen) {
+     return
+    }
+    close()
+    anchor.setAttribute("aria-expanded", "false")
+   }
+   anchor.setAttribute("aria-haspopup", "menu")
+   anchor.setAttribute("aria-expanded", "false")
+   attachMenu(anchor, instance)
+   ensureMenuListeners()
+   liveMenus.push({ anchor, instance })
+   return anchor
   },
   stepBar() {
    const element = themedRow()
@@ -534,6 +763,77 @@ export function schemaNodes(schema: { tables?: { name: string; columns: { name: 
  }))
 }
 
+export function databaseNodes(
+ connections: { id?: string; name?: string }[] | undefined,
+ tables: { name?: string }[] | undefined,
+ activeId: string,
+) {
+ return (connections ?? []).map((connection) => {
+  const id = String(connection?.id ?? "")
+  const active = id !== "" && id === String(activeId ?? "")
+  const tableNodes = active
+   ? (tables ?? []).map((table) => ({
+     id: `table:${id}:${String(table?.name ?? "")}`,
+     label: String(table?.name ?? ""),
+    }))
+   : []
+  return {
+   id: `db:${id}`,
+   label: String(connection?.name || "Database"),
+   expanded: active,
+   children: [
+    {
+     id: `data:${id}`,
+     label: "Data",
+     expanded: active,
+     children: tableNodes,
+    },
+    {
+     id: `schema:${id}`,
+     label: "Schema",
+    },
+   ],
+  }
+ })
+}
+
+export function databaseSelection(view: string, connectionId: string, table: string) {
+ const id = String(connectionId ?? "")
+ if (!id) {
+  return ""
+ }
+ if (view === "schema") {
+  return `schema:${id}`
+ }
+ const name = String(table ?? "")
+ if (name) {
+  return `table:${id}:${name}`
+ }
+ return `data:${id}`
+}
+
+export function readDatabaseNode(value: string) {
+ const text = String(value ?? "")
+ const sep = text.indexOf(":")
+ if (sep < 0) {
+  return { view: "data", connectionId: "", table: "" }
+ }
+ const kind = text.slice(0, sep)
+ const rest = text.slice(sep + 1)
+ if (kind === "table") {
+  const split = rest.indexOf(":")
+  return {
+   view: "data",
+   connectionId: split < 0 ? rest : rest.slice(0, split),
+   table: split < 0 ? "" : rest.slice(split + 1),
+  }
+ }
+ if (kind === "schema") {
+  return { view: "schema", connectionId: rest, table: "" }
+ }
+ return { view: "data", connectionId: rest, table: "" }
+}
+
 export function tableId(value: string) {
  const text = String(value ?? "")
  const dot = text.indexOf(".")
@@ -601,6 +901,8 @@ export function parseDataset(body: string) {
    sourceSql: typeof parsed.sourceSql === "string" ? parsed.sourceSql : "",
    archived: archiveFlags(rows, parsed.archived),
    archiveView: archiveViewOf(parsed.archiveView),
+   baseline: readBaseline(parsed.baseline),
+   pinned: readPinned(parsed.pinned),
   }
  } catch {
   return emptyDataset()
@@ -769,6 +1071,8 @@ type DatasetSchema = {
  rows?: unknown[][]
  sort?: { column: string }[]
  filters?: { column: string }[]
+ baseline?: (unknown[] | null)[]
+ pinned?: string[][]
 }
 
 function columnDraftError(drafts: ColumnDraft[], inserting: boolean) {
@@ -841,6 +1145,32 @@ export function applyDatasetColumns(dataset: DatasetSchema, drafts: ColumnDraft[
  })
  dataset.sort = remapColumnKey(dataset.sort, rename)
  dataset.filters = remapColumnKey(dataset.filters, rename)
+ if (Array.isArray(dataset.baseline)) {
+  dataset.baseline = dataset.baseline.map((row) => {
+   if (!Array.isArray(row)) {
+    return null
+   }
+   return (drafts ?? []).map((draft) => {
+    const from = typeof draft?.from === "number" ? draft.from : -1
+    return from >= 0 ? row[from] ?? "" : ""
+   })
+  })
+ }
+ if (Array.isArray(dataset.pinned)) {
+  dataset.pinned = dataset.pinned.map((names) => {
+   if (!Array.isArray(names)) {
+    return []
+   }
+   const next: string[] = []
+   for (const name of names) {
+    const renamed = rename.get(String(name))
+    if (renamed) {
+     next.push(renamed)
+    }
+   }
+   return next
+  })
+ }
  return dataset
 }
 
@@ -954,6 +1284,13 @@ export function addDatasetRow(dataset: {
  flags.push(false)
  dataset.rows = rows
  dataset.archived = flags
+ const tracked = dataset as { baseline?: (unknown[] | null)[]; pinned?: string[][] }
+ if (Array.isArray(tracked.baseline)) {
+  tracked.baseline.push(null)
+ }
+ if (Array.isArray(tracked.pinned)) {
+  tracked.pinned.push([])
+ }
  if (archiveViewOf(dataset.archiveView) === "only") {
   dataset.archiveView = "show"
  }
@@ -1062,7 +1399,7 @@ export function pipelineTemplates() {
   {
    id: "customers-orders",
    title: "Customers, then orders",
-   detail: "A Crown block reads the customers dataset and builds the next orders query.",
+   detail: "A Crown block reads the customers dataset and builds the next orders query. A select block keeps the larger orders.",
    sampleSql: customersOrdersSql,
    tables: ["customers", "orders"],
    match: customersOrdersMatch,
@@ -1087,7 +1424,7 @@ export function pipelineBlocks() {
    id: id(),
    kind: "markdown",
    name: "",
-   body: "# Customers, then orders\n\nThe Crown block reads the customers dataset and builds the next query.",
+   body: "# Customers, then orders\n\nThe Crown block reads the customers dataset and builds the next query. The select block keeps orders whose total is greater than 8.",
   },
   {
    id: id(),
@@ -1113,6 +1450,12 @@ export function pipelineBlocks() {
    name: "orderRows",
    body: '{"columns":[],"rows":[],"sort":[],"filters":[]}',
   },
+  {
+   id: id(),
+   kind: "select",
+   name: "largeOrders",
+   body: '{"columns":["id","customer_id","total"],"filters":[{"column":"total","op":"gt","value":"8"}]}',
+  },
  ]
 }
 
@@ -1122,6 +1465,7 @@ export function blankBlock(kind: string) {
   crown: "get datasets\n",
   javascript: "return previous\n",
   sql: "SELECT 1\n",
+  select: '{"columns":[],"filters":[]}',
   dataset: stringifyDataset({ columns: [], rows: [], sort: [], filters: [] }),
  }
  return { id: id(), kind, name: "", body: bodies[kind] ?? "", output: null }
@@ -1251,15 +1595,62 @@ export function saveDatasetBlock(blocks: unknown[], index: number, value: unknow
   id: id(),
   kind: "dataset",
   name: "",
-  body: stringifyDataset(data),
+  body: stringifyDataset(stampBaseline(data as { rows?: unknown[][] })),
   output: null,
  })
  return next
 }
 
-export function rowFromDrafts(columns: { name: string; draft?: unknown }[]) {
+export function previousColumns(blocks: { kind?: string; body?: string; output?: unknown }[] | undefined, index: number) {
+ const block = blocks?.[index - 1]
+ if (!block) {
+  return []
+ }
+ const published = block.kind === "dataset" ? parseDataset(block.body ?? "") : block.output
+ const data = asDataset(published)
+ if (!data) {
+  return []
+ }
+ const columns = (data as { columns?: { name?: string }[] }).columns ?? []
+ return columns.map((column) => String(column?.name ?? "")).filter((name) => name.length > 0)
+}
+
+export function mark(element: HTMLElement, name: string, value: string) {
+ element?.setAttribute(String(name), value == null ? "" : String(value))
+ return element
+}
+
+export function columnInputKind(type: unknown) {
+ const text = String(type ?? "").toUpperCase()
+ if (text.includes("BOOL")) {
+  return "boolean"
+ }
+ if (text.includes("DATETIME") || text.includes("TIMESTAMP")) {
+  return "datetime"
+ }
+ if (/(^|[^A-Z])DATE([^A-Z]|$)/.test(text)) {
+  return "date"
+ }
+ if (/(^|[^A-Z])TIME([^A-Z]|$)/.test(text)) {
+  return "time"
+ }
+ if (text.includes("INT")) {
+  return "integer"
+ }
+ if (/REAL|FLOA|DOUB|DEC|NUM/.test(text)) {
+  return "real"
+ }
+ return "text"
+}
+
+export function rowFromDrafts(columns: { name: string; type?: string; draft?: unknown }[]) {
  const row: Record<string, unknown> = {}
  for (const column of columns ?? []) {
+  if (columnInputKind(column.type) === "boolean") {
+   const draft = column.draft
+   row[column.name] = draft === true || draft === "true" || draft === 1 || draft === "1" ? 1 : 0
+   continue
+  }
   if (column.draft != null && column.draft !== "") {
    row[column.name] = column.draft
   }

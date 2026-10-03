@@ -294,6 +294,7 @@ function id [
  at note
  to loaded
  set state note [ get loaded ]
+ set state datasetConflict [ object ]
  get paintList
  call
  get paintNote
@@ -813,6 +814,12 @@ function block index [
  at kind
  to kind
  get kind
+ is select
+ true [
+  get paintSelect
+  call [ get card ] [ get block ] [ get index ]
+ ]
+ get kind
  is markdown
  true [
   get ui
@@ -848,20 +855,24 @@ function block index [
    get kind
    is dataset
    false [
-    get ui
-    at code
-    call [ get block, at body ] [ function value [
-     get editBody
-     call [ get block ] [ get value ]
-    ] ] [ function [
-     get pipeline
-     at runOne
-     call [ get index ]
-    ] ]
-    to editor
-    get ui
-    at append
-    call [ get card ] [ get editor ]
+    get kind
+    is select
+    false [
+     get ui
+     at code
+     call [ get block, at body ] [ function value [
+      get editBody
+      call [ get block ] [ get value ]
+     ] ] [ function [
+      get pipeline
+      at runOne
+      call [ get index ]
+     ] ]
+     to editor
+     get ui
+     at append
+     call [ get card ] [ get editor ]
+    ]
    ]
   ]
  ]
@@ -886,9 +897,33 @@ function card block index [
  at datasetPick
  at [ get block, at id ]
  to picked
+ get state
+ at datasetConflict
+ at [ get block, at id ]
+ to pending
+ get pending
+ is undefined
+ true [
+  set state conflictRow [ get picked ]
+ ]
+ false [
+  get starry
+  at conflictView
+  call [ get data ] [ get pending ]
+  to conflict
+  get conflict
+  at count
+  is 0
+  true [
+   set state conflictRow [ get picked ]
+  ]
+  false [
+   set state conflictRow [ get conflict, at sourceIndex ]
+  ]
+ ]
  get starry
  at shownRowIndex
- call [ get shown, at rows ] [ get data, at rows ] [ get picked ]
+ call [ get shown, at rows ] [ get data, at rows ] [ get state, at conflictRow ]
  to selectedIndex
  get starry
  at archiveViewLabel
@@ -983,6 +1018,12 @@ function card block index [
  get ui
  at append
  call [ get card ] [ get bar ]
+ get pending
+ is undefined
+ false [
+  get paintConflict
+  call [ get card ] [ get index ] [ get data ] [ get pending ]
+ ]
  get ui
  at table
  call [ object [
@@ -1223,7 +1264,405 @@ function index view [
 ]
 to viewDataset
 
+function card index data pending [
+ get starry
+ at conflictView
+ call [ get data ] [ get pending ]
+ to view
+ get view
+ at count
+ is 0
+ false [
+  get ui
+  at column
+  call
+  to panel
+  get starry
+  at mark
+  call [ get panel ] data-conflict-panel ''
+  get ui
+  at row
+  call
+  to nav
+  get ui
+  at button
+  call '< Previous conflict' [ function [
+   get moveConflict
+   call [ get index ] -1
+  ] ]
+  to previousButton
+  get ui
+  at append
+  call [ get nav ] [ get previousButton ]
+  get ui
+  at text
+  call [ get view, at position ]
+  to position
+  get starry
+  at mark
+  call [ get position ] data-conflict-position [ get view, at position ]
+  get ui
+  at append
+  call [ get nav ] [ get position ]
+  get ui
+  at button
+  call '> Next conflict' [ function [
+   get moveConflict
+   call [ get index ] 1
+  ] ]
+  to nextButton
+  get ui
+  at append
+  call [ get nav ] [ get nextButton ]
+  get ui
+  at append
+  call [ get panel ] [ get nav ]
+  get ui
+  at notice
+  call info [ get view, at summary ]
+  to summary
+  get starry
+  at mark
+  call [ get summary ] data-conflict-summary [ get view, at summary ]
+  get ui
+  at append
+  call [ get panel ] [ get summary ]
+  get ui
+  at row
+  call
+  to choices
+  get ui
+  at button
+  call 'Keep mine' [ function [
+   get chooseConflict
+   call [ get index ] keep
+  ] ]
+  to keepButton
+  get ui
+  at append
+  call [ get choices ] [ get keepButton ]
+  get ui
+  at button
+  call 'Use query' [ function [
+   get chooseConflict
+   call [ get index ] take
+  ] ]
+  to takeButton
+  get ui
+  at append
+  call [ get choices ] [ get takeButton ]
+  get ui
+  at append
+  call [ get panel ] [ get choices ]
+  get ui
+  at append
+  call [ get card ] [ get panel ]
+ ]
+]
+to paintConflict
+
+function index delta [
+ get state
+ at note
+ at blocks
+ at [ get index ]
+ to block
+ get state
+ at datasetConflict
+ at [ get block, at id ]
+ to pending
+ get pending
+ is undefined
+ true [
+ ]
+ false [
+  get starry
+  at parseDataset
+  call [ get block, at body ]
+  to data
+  get starry
+  at conflictView
+  call [ get data ] [ get pending ]
+  to view
+  get starry
+  at shiftConflictCursor
+  call [ get view, at cursor ] [ get view, at count ] [ get delta ]
+  to cursor
+  set pending cursor [ get cursor ]
+  get paintNote
+  call
+ ]
+]
+to moveConflict
+
+function index choice [
+ get state
+ at note
+ at blocks
+ at [ get index ]
+ to block
+ get state
+ at datasetConflict
+ at [ get block, at id ]
+ to pending
+ get pending
+ is undefined
+ true [
+ ]
+ false [
+  get starry
+  at parseDataset
+  call [ get block, at body ]
+  to data
+  get pending
+  at choices
+  to choices
+  get choices
+  is undefined
+  true [
+   set pending choices [ object ]
+   get pending
+   at choices
+   to choices
+  ]
+  get starry
+  at conflictView
+  call [ get data ] [ get pending ]
+  to view
+  set choices [ get view, at sourceIndex ] [ get choice ]
+  get starry
+  at conflictView
+  call [ get data ] [ get pending ]
+  to next
+  get next
+  at applied
+  is null
+  true [
+   get starry
+   at shiftConflictCursor
+   call [ get view, at cursor ] [ get next, at count ] 1
+   to cursor
+   set pending cursor [ get cursor ]
+   get paintNote
+   call
+  ]
+  false [
+   get finishConflict
+   call [ get index ] [ get next ]
+  ]
+ ]
+]
+to chooseConflict
+
+function index view [
+ get state
+ at note
+ at blocks
+ at [ get index ]
+ to block
+ unset state datasetConflict [ get block, at id ]
+ get starry
+ at stringifyDataset
+ call [ get view, at applied ]
+ to body
+ set block body [ get body ]
+ set block output null
+ get saveNote
+ call
+ get paintNote
+ call
+]
+to finishConflict
+
 function card block index [
+ get starry
+ at previousColumns
+ call [ get state, at note, at blocks ] [ get index ]
+ to available
+ get starry
+ at selectColumnNames
+ call [ get available ] [ get block, at body ]
+ to names
+ get starry
+ at selectFilterOf
+ call [ get block, at body ]
+ to filter
+ get starry
+ at selectOpLabel
+ call [ get filter, at op ]
+ to opLabel
+ get ui
+ at column
+ call
+ to form
+ get starry
+ at mark
+ call [ get form ] data-select-block [ get block, at id ]
+ get ui
+ at notice
+ call info 'Keeps columns and rows from the previous step.'
+ to intro
+ get ui
+ at append
+ call [ get form ] [ get intro ]
+ get names
+ at length
+ is 0
+ true [
+  get ui
+  at notice
+  call empty 'Run the previous step to choose columns from its dataset.'
+  to emptyColumns
+  get ui
+  at append
+  call [ get form ] [ get emptyColumns ]
+ ]
+ false [
+  get names
+  each [ function name [
+   get ui
+   at row
+   call
+   to line
+   get starry
+   at selectColumnChecked
+   call [ get block, at body ] [ get name ]
+   to checked
+   get ui
+   at check
+   call [ get checked ] [ function value [
+    get starry
+    at writeSelectColumn
+    call [ get block, at body ] [ get name ] [ get value ] [ get names ]
+    to nextBody
+    set block body [ get nextBody ]
+    get paintNote
+    call
+   ] ]
+   to box
+   get ui
+   at append
+   call [ get line ] [ get box ]
+   get ui
+   at text
+   call [ get name ]
+   to label
+   get ui
+   at append
+   call [ get line ] [ get label ]
+   get ui
+   at append
+   call [ get form ] [ get line ]
+  ] ]
+ ]
+ get ui
+ at row
+ call
+ to filterRow
+ get ui
+ at field
+ call Column [ get filter, at column ] [ function value [
+  get starry
+  at writeSelectFilter
+  call [ get block, at body ] [ object [
+   column [ get value ]
+  ] ]
+  to nextBody
+  set block body [ get nextBody ]
+ ] ]
+ to columnField
+ get ui
+ at append
+ call [ get filterRow ] [ get columnField ]
+ get ui
+ at button
+ call [ get opLabel ]
+ to opButton
+ get ui
+ at menu
+ call [ get opButton ] [ list [ object [
+  label equals
+  action [ function [
+   get setSelectOp
+   call [ get index ] eq
+  ] ]
+ ] ] [ object [
+  label 'not equals'
+  action [ function [
+   get setSelectOp
+   call [ get index ] neq
+  ] ]
+ ] ] [ object [
+  label 'greater than'
+  action [ function [
+   get setSelectOp
+   call [ get index ] gt
+  ] ]
+ ] ] [ object [
+  label 'less than'
+  action [ function [
+   get setSelectOp
+   call [ get index ] lt
+  ] ]
+ ] ] [ object [
+  label contains
+  action [ function [
+   get setSelectOp
+   call [ get index ] contains
+  ] ]
+ ] ] ]
+ get ui
+ at append
+ call [ get filterRow ] [ get opButton ]
+ get ui
+ at field
+ call Value [ get filter, at value ] [ function value [
+  get starry
+  at writeSelectFilter
+  call [ get block, at body ] [ object [
+   value [ get value ]
+  ] ]
+  to nextBody
+  set block body [ get nextBody ]
+ ] ]
+ to valueField
+ get ui
+ at append
+ call [ get filterRow ] [ get valueField ]
+ get ui
+ at append
+ call [ get form ] [ get filterRow ]
+ get ui
+ at append
+ call [ get card ] [ get form ]
+]
+to paintSelect
+
+function index op [
+ get state
+ at note
+ at blocks
+ at [ get index ]
+ to block
+ get starry
+ at writeSelectFilter
+ call [ get block, at body ] [ object [
+  op [ get op ]
+ ] ]
+ to nextBody
+ set block body [ get nextBody ]
+ get paintNote
+ call
+]
+to setSelectOp
+
+ function card block index [
+ get block
+ at kind
+ is dataset
+ true [
+ ]
+ false [
  get block
  at output
  to output
@@ -1304,6 +1743,7 @@ function card block index [
  ]
  ]
  ]
+ ]
 ]
 to paintOutput
 
@@ -1341,6 +1781,12 @@ function index [
   action [ function [
    get addKind
    call [ get index ] sql
+  ] ]
+ ] ] [ object [
+  label Select
+  action [ function [
+   get addKind
+   call [ get index ] select
   ] ]
  ] ] [ object [
   label Dataset

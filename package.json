@@ -9,7 +9,7 @@
     "start": "node scripts/build-web.mjs && node ./crown server/dev.mcr",
     "start:production": "node scripts/build-web.mjs && node ./crown server/serve.mcr",
     "build": "node scripts/build-web.mjs",
-    "test": "node --test"
+    "test": "node --experimental-strip-types --test"
   },
   "dependencies": {
     "@libsql/client": "^0.18.0",
