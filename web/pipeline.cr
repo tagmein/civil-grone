@@ -1,3 +1,57 @@
+function name data [
+ get starry
+ at stringifyDataset
+ call [ get data ]
+ to body
+ get state
+ at note
+ at blocks
+ find [ function block [
+  get block
+  at kind
+  is dataset
+  to kindOk
+  get block
+  at name
+  is [ get name ]
+  to nameOk
+  all [ get kindOk ] [ get nameOk ]
+ ] ]
+ to block
+ get block
+ is undefined
+ false [
+  set block body [ get body ]
+  get notes
+  at saveNote
+  call
+ ]
+]
+to writeDataset
+
+function [
+ set state refreshIndex -1
+ get state
+ at note
+ at blocks
+ each [ function block index [
+  get block
+  at kind
+  is crown
+  true [
+   set state refreshIndex [ get index ]
+  ]
+ ] ]
+ get state
+ at refreshIndex
+ < 0
+ false [
+  get runOne
+  call [ get state, at refreshIndex ]
+ ]
+]
+to refresh
+
 function index [
  get state
  at note
@@ -11,8 +65,17 @@ function index [
   call [ get state, at connectionId ]
   to sqlFn
   get starry
+  at trackUi
+  call [ get ui ]
+  to crownUi
+  get starry
   at bindingsBefore
-  call [ get state, at note, at blocks ] [ get index ] [ get sqlFn ]
+  call [ get state, at note, at blocks ] [ get index ] [ get sqlFn ] [ object [
+   ui [ get crownUi ]
+   starry [ get starry ]
+   writeDataset [ get writeDataset ]
+   refresh [ get refresh ]
+  ] ]
   to bindings
   get block
   at kind

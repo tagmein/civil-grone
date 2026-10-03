@@ -378,6 +378,7 @@ export function createUi(theme = themeMidnight) {
     onSort: (sort) => void guard(config.onSort)(sort),
     onFilter: (filters) => void guard(config.onFilter)(filters),
     onPage: (page) => void guard(config.onPage)(page),
+    selectedIndex: typeof config.selectedIndex === "number" ? config.selectedIndex : undefined,
     onSelectRow: (index) => void guard(config.onSelectRow)(index),
     onCellEdit: (row, columnName, value) => void guard(config.onCellEdit)(row, columnName, value),
    })
@@ -863,9 +864,26 @@ export function retainStepErrors(
  }
 }
 
+export function isElement(value: unknown) {
+ return typeof HTMLElement !== "undefined" && value instanceof HTMLElement
+}
+
+export function trackUi<T extends { dialog(title: string): { element: HTMLElement } }>(ui: T): T {
+ const tracked = {
+  ...ui,
+  dialog(title: string) {
+   const instance = ui.dialog(title)
+   instance.element.setAttribute("data-example-dialog", "1")
+   return instance
+  },
+ }
+ return tracked as T
+}
+
 export function clearScreen(container: HTMLElement) {
  container.removeAttribute("data-screen")
  container.removeAttribute("data-demo")
+ document.querySelectorAll("[data-example-dialog]").forEach((node) => node.remove())
 }
 
 export function renderExamples(
@@ -874,6 +892,7 @@ export function renderExamples(
  onHome: unknown,
  onList: unknown,
  onOpen: unknown,
+ onImport: unknown,
  activeId: unknown,
 ) {
  paintExamples(container, ui, {
@@ -886,7 +905,23 @@ export function renderExamples(
   open(id) {
    void guard(onOpen)(id)
   },
- }, typeof activeId === "string" ? activeId : "")
+ }, typeof activeId === "string" ? activeId : "", {
+  importExample(title, blocks) {
+   void guard(onImport)(title, blocks)
+  },
+  run(source, datasets, writeDataset, refresh) {
+   return runUserCrown(source, {
+    datasets,
+    previous: null,
+    inList,
+    sql: async () => ({ columns: [], rows: [], sort: [], filters: [], sourceSql: "" }),
+    ui: trackUi(ui),
+    starry: { asDataset, id, isElement, parseDataset, stringifyDataset, visibleRows },
+    writeDataset,
+    refresh,
+   })
+  },
+ })
 }
 
 export function renderHome(

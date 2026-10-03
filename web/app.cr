@@ -83,6 +83,13 @@ function [
  at append
  call [ get about, at panel ] [ get notesCopy ]
  get ui
+ at markdown
+ call 'Examples are Grone notes you can preview or import. Each one is a sample dataset plus Crown that builds the interface.'
+ to examplesCopy
+ get ui
+ at append
+ call [ get about, at panel ] [ get examplesCopy ]
+ get ui
  at button
  call Close [ function [
   get about
@@ -122,6 +129,52 @@ function [
 ]
 to renderHome
 
+function title blocks [
+ get state
+ at connectionId
+ is ''
+ true [
+  get shell
+  at setStatus
+  call 'Select or create a database before importing an example.' error
+ ]
+ false [
+  get starry
+  at api
+  call 'notes/ensure' [ object [
+   connectionId [ get state, at connectionId ]
+  ] ]
+  get starry
+  at id
+  call
+  to noteId
+  set state note [ object [
+   id [ get noteId ]
+   title [ get title ]
+   blocks [ get blocks ]
+  ] ]
+  get notes
+  at saveNote
+  call
+  set state section notes
+  set state example ''
+  get render
+  call
+  get pipeline
+  at runFrom
+  call 0
+  get state
+  at stepOk
+  is true
+  true [
+   get shell
+   at setStatus
+   call 'Imported into Notes.' info
+  ]
+ ]
+]
+to importExample
+
 function [
  get ui
  at clear
@@ -143,6 +196,9 @@ function [
   set state example [ get id ]
   get render
   call
+ ] ] [ function title blocks [
+  get importExample
+  call [ get title ] [ get blocks ]
  ] ] [ get state, at example ]
 ]
 to renderExamples

@@ -462,26 +462,6 @@ function block index [
  call [ get tools ] [ get nameInput ]
  get ui
  at button
- call Up [ function [
-  get move
-  call [ get index ] -1
- ] ]
- to upButton
- get ui
- at append
- call [ get tools ] [ get upButton ]
- get ui
- at button
- call Down [ function [
-  get move
-  call [ get index ] 1
- ] ]
- to downButton
- get ui
- at append
- call [ get tools ] [ get downButton ]
- get ui
- at button
  call Run [ function [
   get pipeline
   at runOne
@@ -504,14 +484,32 @@ function block index [
  call [ get tools ] [ get fromButton ]
  get ui
  at button
- call Remove [ function [
-  get drop
-  call [ get index ]
- ] ]
- to removeButton
+ call '⋯'
+ to moreButton
+ get ui
+ at menu
+ call [ get moreButton ] [ list [ object [
+  label Remove
+  action [ function [
+   get drop
+   call [ get index ]
+  ] ]
+ ] ] [ object [
+  label 'Move up'
+  action [ function [
+   get move
+   call [ get index ] -1
+  ] ]
+ ] ] [ object [
+  label 'Move down'
+  action [ function [
+   get move
+   call [ get index ] 1
+  ] ]
+ ] ] ]
  get ui
  at append
- call [ get tools ] [ get removeButton ]
+ call [ get tools ] [ get moreButton ]
  get ui
  at append
  call [ get bar ] [ get tools ]
@@ -704,6 +702,18 @@ function card block index [
  is null
  false [
   get starry
+  at isElement
+  call [ get output ]
+  to element
+  get element
+  is true
+  true [
+   get ui
+   at append
+   call [ get card ] [ get output ]
+  ]
+  false [
+  get starry
   at asDataset
   call [ get output ]
   to data
@@ -757,6 +767,7 @@ function card block index [
    at append
    call [ get card ] [ get saveButton ]
   ]
+ ]
  ]
  ]
 ]
