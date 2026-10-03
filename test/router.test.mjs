@@ -112,6 +112,14 @@ test("dev server serves the page, crown module, and api", async () => {
     assert.equal(moduleText.includes("export { crown }"), true)
     const health = await fetch(`${base}/api/health`)
     assert.deepEqual(await health.json(), { ok: true })
+    const notesPage = await fetch(`${base}/notes`)
+    assert.equal(notesPage.status, 200)
+    assert.match(await notesPage.text(), /runFile\("\/app\.cr"\)/)
+    const notePage = await fetch(`${base}/notes/note-1`)
+    assert.equal(notePage.status, 200)
+    assert.match(await notePage.text(), /import\("\/crown\.mjs"\)/)
+    const nested = await fetch(`${base}/notes/note-1/extra`)
+    assert.equal(nested.status, 404)
     const missing = await fetch(`${base}/nope`)
     assert.equal(missing.status, 404)
   } finally {
@@ -267,6 +275,20 @@ INSERT INTO orders (id, customer_id, total) VALUES (10, 1, 5), (11, 2, 9);`,
     })
     assert.equal(quoted.status, 404)
 
+    const legacy = await request("databases/query", {
+      method: "POST",
+      body: {
+        connectionId: connection.id,
+        sql: `CREATE TABLE grone_note (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        INSERT INTO grone_note (id, title, updated_at) VALUES ('legacy', 'Legacy', '2020-01-01T00:00:00.000Z')`,
+      },
+    })
+    assert.equal(legacy.status, 200)
+
     const ensured = await request("notes/ensure", {
       method: "POST",
       body: { connectionId: connection.id },
@@ -279,6 +301,8 @@ INSERT INTO orders (id, customer_id, total) VALUES (10, 1, 5), (11, 2, 9);`,
     const names = JSON.parse(withNotes.body).tables.map((table) => table.name)
     assert.ok(names.includes("grone_note"))
     assert.ok(names.includes("grone_block"))
+    const noteTable = JSON.parse(withNotes.body).tables.find((table) => table.name === "grone_note")
+    assert.ok(noteTable.columns.some((column) => column.name === "archived"))
 
     const saved = await request("notes/save", {
       method: "POST",
@@ -308,15 +332,45 @@ INSERT INTO orders (id, customer_id, total) VALUES (10, 1, 5), (11, 2, 9);`,
     assert.equal(saved.status, 200)
     const note = JSON.parse(saved.body).note
     assert.equal(note.blocks.length, 2)
+    assert.equal(note.archived, 0)
     assert.equal(note.blocks[1].kind, "dataset")
     const dataset = JSON.parse(note.blocks[1].body)
     assert.deepEqual(dataset.sort, [{ column: "id", direction: "asc" }])
+
+    const archived = await request("notes/save", {
+      method: "POST",
+      body: {
+        connectionId: connection.id,
+        note: { ...note, archived: 1 },
+      },
+    })
+    assert.equal(archived.status, 200)
+    assert.equal(JSON.parse(archived.body).note.archived, 1)
+    const listedNotes = await request("notes/list", {
+      method: "POST",
+      body: { connectionId: connection.id },
+    })
+    const notes = JSON.parse(listedNotes.body).notes
+    assert.equal(notes.find((item) => item.id === "legacy").archived, 0)
+    assert.equal(notes.find((item) => item.id === "note-1").archived, 1)
+    const { archived: archivedFlag, ...withoutFlag } = JSON.parse(archived.body).note
+    assert.equal(archivedFlag, 1)
+    const kept = await request("notes/save", {
+      method: "POST",
+      body: {
+        connectionId: connection.id,
+        note: { ...withoutFlag, title: "Pipeline kept" },
+      },
+    })
+    assert.equal(JSON.parse(kept.body).note.archived, 1)
+    assert.equal(JSON.parse(kept.body).note.title, "Pipeline kept")
 
     const fetched = await request("notes/get", {
       method: "POST",
       body: { connectionId: connection.id, id: "note-1" },
     })
-    assert.equal(JSON.parse(fetched.body).note.title, "Pipeline")
+    assert.equal(JSON.parse(fetched.body).note.title, "Pipeline kept")
+    assert.equal(JSON.parse(fetched.body).note.archived, 1)
 
     const removed = await request("notes/delete", {
       method: "POST",

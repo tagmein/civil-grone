@@ -31,9 +31,23 @@ function [
   call [ get shell, at main ] [ get panes, at element ]
   set state noteListPane [ get panes, at start ]
   set state notePane [ get panes, at end ]
-  get paintList
-  call
-  get paintNote
+  get state
+  at routeNoteId
+  to pending
+  unset state routeNoteId
+  get pending
+  is undefined
+  true [
+   get paintList
+   call
+   get paintNote
+   call
+  ]
+  false [
+   get followRoute
+   call [ get pending ]
+  ]
+  get syncRoute
   call
  ]
 ]
@@ -79,12 +93,64 @@ function [
  get ui
  at append
  call [ get bar ] [ get pipelineButton ]
+ get state
+ at archiveFilter
+ is show
+ to showArchived
+ get state
+ at archiveFilter
+ is only
+ to onlyArchived
+ pick [
+ get showArchived
+ value 'Show archived'
+ to filterLabel
+ ] [
+ get onlyArchived
+ value 'Only archived'
+ to filterLabel
+ ] [
+ true
+ value 'Hide archived'
+ to filterLabel
+ ]
+ get ui
+ at button
+ call [ get filterLabel ]
+ to filterButton
+ get ui
+ at menu
+ call [ get filterButton ] [ list [ object [
+  label 'Hide archived'
+  action [ function [
+   set state archiveFilter hide
+   get paintList
+   call
+  ] ]
+ ] ] [ object [
+  label 'Show archived'
+  action [ function [
+   set state archiveFilter show
+   get paintList
+   call
+  ] ]
+ ] ] [ object [
+  label 'Only archived'
+  action [ function [
+   set state archiveFilter only
+   get paintList
+   call
+  ] ]
+ ] ] ]
+ get ui
+ at append
+ call [ get bar ] [ get filterButton ]
  get ui
  at append
  call [ get state, at noteListPane ] [ get bar ]
  get starry
  at noteNodes
- call [ get state, at notes ]
+ call [ get state, at notes ] [ get state, at archiveFilter ]
  to nodes
  set state selected ''
  get state
@@ -97,18 +163,126 @@ function [
   to selectedId
   set state selected [ get selectedId ]
  ]
- get ui
- at tree
- call [ get nodes ] [ get state, at selected ] [ function id [
-  get openNote
-  call [ get id ]
- ] ]
- to noteTree
- get ui
- at append
- call [ get state, at noteListPane ] [ get noteTree ]
+ get nodes
+ at length
+ is 0
+ true [
+  pick [
+  get onlyArchived
+  value 'No archived notes.'
+  to emptyCopy
+  ] [
+  true
+  value 'No notes yet.'
+  to emptyCopy
+  ]
+  get ui
+  at notice
+  call empty [ get emptyCopy ]
+  to emptyList
+  get ui
+  at append
+  call [ get state, at noteListPane ] [ get emptyList ]
+ ]
+ false [
+  get ui
+  at tree
+  call [ get nodes ] [ get state, at selected ] [ function id [
+   get openNote
+   call [ get id ]
+  ] ]
+  to noteTree
+  get ui
+  at append
+  call [ get state, at noteListPane ] [ get noteTree ]
+ ]
 ]
 to paintList
+
+function id [
+ get id
+ is ''
+ true [
+  set state note null
+  get paintList
+  call
+  get paintNote
+  call
+ ]
+ false [
+  get state
+  at note
+  is null
+  false [
+   get state
+   at note
+   at id
+   is [ get id ]
+   true [
+    get paintList
+    call
+    get paintNote
+    call
+   ]
+   false [
+    get openRouted
+    call [ get id ]
+   ]
+  ]
+  true [
+   get openRouted
+   call [ get id ]
+  ]
+ ]
+]
+to followRoute
+
+function id [
+ try [
+  get openNote
+  call [ get id ]
+ ] [
+  set state note null
+  get paintList
+  call
+  get paintNote
+  call
+  get shell
+  at setStatus
+  call 'That note is not in this database.' error
+  get starry
+  at writeRoute
+  call notes '' '' replace
+ ]
+]
+to openRouted
+
+function [
+ get state
+ at section
+ is notes
+ true [
+  get state
+  at note
+  is null
+  to missing
+  pick [
+  get missing
+  value ''
+  to noteId
+  ] [
+  true
+  get state
+  at note
+  at id
+  to noteId
+  ]
+  get starry
+  at writeRoute
+  call notes [ get noteId ] '' push
+ ]
+]
+to syncRoute
 
 function id [
  get starry
@@ -123,6 +297,8 @@ function id [
  get paintList
  call
  get paintNote
+ call
+ get syncRoute
  call
  get starry
  at sampleForNote
@@ -164,6 +340,7 @@ function [
  set state note [ object [
   id [ get noteId ]
   title 'Untitled'
+  archived 0
   blocks [ list [ get block ] ]
  ] ]
  get saveNote
@@ -171,6 +348,8 @@ function [
  get paintList
  call
  get paintNote
+ call
+ get syncRoute
  call
 ]
 to newNote
@@ -240,6 +419,7 @@ function template [
  set state note [ object [
   id [ get noteId ]
   title [ get title ]
+  archived 0
   blocks [ get blocks ]
  ] ]
  get saveNote
@@ -247,6 +427,8 @@ function template [
  get paintList
  call
  get paintNote
+ call
+ get syncRoute
  call
  get template
  at sampleSql
@@ -379,16 +561,45 @@ function [
   get ui
   at append
   call [ get titleRow ] [ get runAll ]
-  get ui
-  at button
-  call Delete [ function [
-   get deleteNote
+ get state
+ at note
+ at archived
+ is 1
+ to noteArchived
+ pick [
+ get noteArchived
+ value Unarchive
+ to archiveLabel
+ ] [
+ true
+ value Archive
+ to archiveLabel
+ ]
+ get ui
+ at button
+ call '⋯'
+ to noteMenuButton
+ get ui
+ at menu
+ call [ get noteMenuButton ] [ list [ object [
+  label [ get archiveLabel ]
+  action [ function [
+   get toggleArchive
    call
   ] ]
-  to deleteButton
-  get ui
-  at append
-  call [ get titleRow ] [ get deleteButton ]
+ ] ] [ object [
+  label Delete
+  action [ function [
+   get confirmAction
+   call 'Delete note' 'Delete this note? This cannot be undone.' Delete [ function [
+    get deleteNote
+    call
+   ] ]
+  ] ]
+ ] ] ]
+ get ui
+ at append
+ call [ get titleRow ] [ get noteMenuButton ]
   get ui
   at append
   call [ get state, at notePane ] [ get titleRow ]
@@ -405,6 +616,68 @@ function [
 ]
 to paintNote
 
+function title message label action [
+ get ui
+ at dialog
+ call [ get title ]
+ to confirm
+ get ui
+ at notice
+ call info [ get message ]
+ to confirmMessage
+ get ui
+ at append
+ call [ get confirm, at panel ] [ get confirmMessage ]
+ get ui
+ at button
+ call Cancel [ function [
+  get confirm
+  at close
+  call
+ ] ]
+ to cancelButton
+ get ui
+ at append
+ call [ get confirm, at panel ] [ get cancelButton ]
+ get ui
+ at button
+ call [ get label ] [ function [
+  get confirm
+  at close
+  call
+  get action
+  call
+ ] ]
+ to confirmButton
+ get ui
+ at append
+ call [ get confirm, at panel ] [ get confirmButton ]
+ get confirm
+ at open
+ call
+]
+to confirmAction
+
+function [
+ get state
+ at note
+ at archived
+ is 1
+ true [
+  set state note archived 0
+ ]
+ false [
+  set state note archived 1
+ ]
+ get saveNote
+ call
+ get paintList
+ call
+ get paintNote
+ call
+]
+to toggleArchive
+
 function [
  get starry
  at api
@@ -418,6 +691,8 @@ function [
  get paintList
  call
  get paintNote
+ call
+ get syncRoute
  call
 ]
 to deleteNote
@@ -491,8 +766,11 @@ function block index [
  call [ get moreButton ] [ list [ object [
   label Remove
   action [ function [
-   get drop
-   call [ get index ]
+   get confirmAction
+   call 'Remove block' 'Remove this block from the note?' Remove [ function [
+    get drop
+    call [ get index ]
+   ] ]
   ] ]
  ] ] [ object [
   label 'Move up'
@@ -600,6 +878,87 @@ function card block index [
  at parseDataset
  call [ get block, at body ]
  to data
+ get starry
+ at editorRows
+ call [ get data ]
+ to shown
+ get state
+ at datasetPick
+ at [ get block, at id ]
+ to picked
+ get starry
+ at shownRowIndex
+ call [ get shown, at rows ] [ get data, at rows ] [ get picked ]
+ to selectedIndex
+ get starry
+ at archiveViewLabel
+ call [ get data, at archiveView ]
+ to viewLabel
+ get starry
+ at rowArchived
+ call [ get data ] [ get picked ]
+ to archivedRow
+ pick [
+ get archivedRow
+ value Unarchive
+ to rowArchiveLabel
+ ] [
+ true
+ value Archive
+ to rowArchiveLabel
+ ]
+ get ui
+ at row
+ call
+ to bar
+ get ui
+ at button
+ call 'Add row' [ function [
+  get addRow
+  call [ get index ] [ get block ]
+ ] ]
+ to addButton
+ get ui
+ at append
+ call [ get bar ] [ get addButton ]
+ get ui
+ at button
+ call [ get rowArchiveLabel ] [ function [
+  get archiveRow
+  call [ get index ] [ get block ]
+ ] ]
+ to archiveButton
+ get ui
+ at append
+ call [ get bar ] [ get archiveButton ]
+ get ui
+ at button
+ call [ get viewLabel ]
+ to viewButton
+ get ui
+ at menu
+ call [ get viewButton ] [ list [ object [
+  label 'Hide archived'
+  action [ function [
+   get viewDataset
+   call [ get index ] hide
+  ] ]
+ ] ] [ object [
+  label 'Show archived'
+  action [ function [
+   get viewDataset
+   call [ get index ] show
+  ] ]
+ ] ] [ object [
+  label 'Only archived'
+  action [ function [
+   get viewDataset
+   call [ get index ] only
+  ] ]
+ ] ] ]
+ get ui
+ at append
+ call [ get bar ] [ get viewButton ]
  get ui
  at button
  call Refresh [ function [
@@ -610,19 +969,20 @@ function card block index [
  to refreshButton
  get ui
  at append
- call [ get card ] [ get refreshButton ]
- get starry
- at visibleRows
- call [ get data ]
- to rows
+ call [ get bar ] [ get refreshButton ]
+ get ui
+ at append
+ call [ get card ] [ get bar ]
  get ui
  at table
  call [ object [
   columns [ get data, at columns ]
-  rows [ get rows ]
+  rows [ get shown, at rows ]
   sort [ get data, at sort ]
   filters [ get data, at filters ]
-  editable false
+  archived [ get shown, at archived ]
+  editable true
+  selectedIndex [ get selectedIndex ]
   onSort [ function sort [
    get sortDataset
    call [ get index ] [ get sort ]
@@ -630,6 +990,45 @@ function card block index [
   onFilter [ function filters [
    get filterDataset
    call [ get index ] [ get filters ]
+  ] ]
+  onSelectRow [ function shownIndex [
+   get shown
+   at rows
+   at [ get shownIndex ]
+   to row
+   get starry
+   at datasetSourceIndex
+   call [ get data, at rows ] [ get row ]
+   to sourceIndex
+   set state datasetPick [ get block, at id ] [ get sourceIndex ]
+   get starry
+   at rowArchived
+   call [ get data ] [ get sourceIndex ]
+   to archivedRow
+   get archivedRow
+   is true
+   true [
+    set archiveButton textContent Unarchive
+   ]
+   false [
+    set archiveButton textContent Archive
+   ]
+  ] ]
+  onCellEdit [ function shownIndex column value [
+   get shown
+   at rows
+   at [ get shownIndex ]
+   to row
+   get starry
+   at datasetSourceIndex
+   call [ get data, at rows ] [ get row ]
+   to sourceIndex
+   get commitDataset
+   call [ get index ] [ function data [
+    get starry
+    at editDatasetCell
+    call [ get data ] [ get sourceIndex ] [ get column ] [ get value ]
+   ] ]
   ] ]
  ] ]
  to grid
@@ -688,6 +1087,98 @@ function index filters [
  call
 ]
 to filterDataset
+
+function index change [
+ get state
+ at note
+ at blocks
+ at [ get index ]
+ to block
+ get starry
+ at parseDataset
+ call [ get block, at body ]
+ to data
+ get change
+ call [ get data ]
+ get starry
+ at stringifyDataset
+ call [ get data ]
+ to body
+ set block body [ get body ]
+ get clearStepError
+ call [ get block ]
+ get saveNote
+ call
+ get paintNote
+ call
+]
+to commitDataset
+
+function index block [
+ get starry
+ at parseDataset
+ call [ get block, at body ]
+ to data
+ get data
+ at columns
+ at length
+ is 0
+ true [
+  get shell
+  at setStatus
+  call 'This dataset has no columns to fill.' error
+ ]
+ false [
+  get commitDataset
+  call [ get index ] [ function data [
+   get starry
+   at addDatasetRow
+   call [ get data ]
+   to rowIndex
+   set state datasetPick [ get block, at id ] [ get rowIndex ]
+  ] ]
+ ]
+]
+to addRow
+
+function index block [
+ get state
+ at datasetPick
+ at [ get block, at id ]
+ to sourceIndex
+ get starry
+ at parseDataset
+ call [ get block, at body ]
+ to data
+ get starry
+ at datasetRowPicked
+ call [ get data ] [ get sourceIndex ]
+ is true
+ false [
+  get shell
+  at setStatus
+  call 'Select a row first.' error
+ ]
+ true [
+  get commitDataset
+  call [ get index ] [ function data [
+   get starry
+   at toggleDatasetArchive
+   call [ get data ] [ get sourceIndex ]
+  ] ]
+ ]
+]
+to archiveRow
+
+function index view [
+ get commitDataset
+ call [ get index ] [ function data [
+  get starry
+  at setArchiveView
+  call [ get data ] [ get view ]
+ ] ]
+]
+to viewDataset
 
 function card block index [
  get block

@@ -406,17 +406,34 @@ async function ensureNotes(client) {
       body TEXT NOT NULL
     );
   `)
+  const info = await client.execute({
+    sql: "SELECT name FROM pragma_table_info(?)",
+    args: ["grone_note"],
+  })
+  const names = info.rows.map((row) => String(row.name ?? row[0]))
+  if (!names.includes("archived")) {
+    await client.execute("ALTER TABLE grone_note ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
+  }
+}
+
+function noteSummary(row) {
+  return {
+    id: String(row.id ?? row[0]),
+    title: String(row.title ?? row[1]),
+    updated_at: String(row.updated_at ?? row[2]),
+    archived: archivedFlag(row.archived ?? row[3]),
+  }
+}
+
+function archivedFlag(value) {
+  return value === true || value === 1 || value === 1n || value === "1" ? 1 : 0
 }
 
 async function listNotes(client) {
   await ensureNotes(client)
-  const result = await client.execute("SELECT id, title, updated_at FROM grone_note ORDER BY updated_at DESC")
+  const result = await client.execute("SELECT id, title, updated_at, archived FROM grone_note ORDER BY updated_at DESC")
   return ok({
-    notes: result.rows.map((row) => ({
-      id: String(row.id ?? row[0]),
-      title: String(row.title ?? row[1]),
-      updated_at: String(row.updated_at ?? row[2]),
-    })),
+    notes: result.rows.map(noteSummary),
   })
 }
 
@@ -424,7 +441,7 @@ async function getNote(client, body) {
   await ensureNotes(client)
   const id = text(body?.id)
   const note = await client.execute({
-    sql: "SELECT id, title, updated_at FROM grone_note WHERE id = ?",
+    sql: "SELECT id, title, updated_at, archived FROM grone_note WHERE id = ?",
     args: [id],
   })
   if (note.rows.length === 0) {
@@ -437,9 +454,7 @@ async function getNote(client, body) {
   const row = note.rows[0]
   return ok({
     note: {
-      id: String(row.id ?? row[0]),
-      title: String(row.title ?? row[1]),
-      updated_at: String(row.updated_at ?? row[2]),
+      ...noteSummary(row),
       blocks: blocks.rows.map((block) => ({
         id: String(block.id ?? block[0]),
         position: Number(block.position ?? block[1]),
@@ -461,12 +476,23 @@ async function saveNote(client, body) {
   }
   const blocks = Array.isArray(note?.blocks) ? note.blocks : []
   const updatedAt = new Date().toISOString()
+  let archived = archivedFlag(note?.archived)
+  if (note?.archived == null) {
+    const existing = await client.execute({
+      sql: "SELECT archived FROM grone_note WHERE id = ?",
+      args: [id],
+    })
+    if (existing.rows.length > 0) {
+      const row = existing.rows[0]
+      archived = archivedFlag(row.archived ?? row[0])
+    }
+  }
   const tx = await client.transaction("write")
   try {
     await tx.execute({
-      sql: `INSERT INTO grone_note (id, title, updated_at) VALUES (?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET title = excluded.title, updated_at = excluded.updated_at`,
-      args: [id, title, updatedAt],
+      sql: `INSERT INTO grone_note (id, title, updated_at, archived) VALUES (?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET title = excluded.title, updated_at = excluded.updated_at, archived = excluded.archived`,
+      args: [id, title, updatedAt, archived],
     })
     await tx.execute({ sql: "DELETE FROM grone_block WHERE note_id = ?", args: [id] })
     for (let index = 0; index < blocks.length; index += 1) {

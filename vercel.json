@@ -2,6 +2,10 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
   "buildCommand": "npm run build",
+  "rewrites": [
+    { "source": "/notes", "destination": "/index.html" },
+    { "source": "/notes/:noteId", "destination": "/index.html" }
+  ],
   "functions": {
     "api/**/*.js": {
       "includeFiles": "{crown,server/**}"

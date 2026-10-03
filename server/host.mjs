@@ -35,6 +35,10 @@ async function crownModule(production) {
   return clipped
 }
 
+function isNotesRoute(pathname) {
+  return pathname === "/notes" || pathname === "/notes/" || /^\/notes\/[^/]+\/?$/.test(pathname)
+}
+
 function readBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = []
@@ -112,8 +116,8 @@ async function handleRequest(req, res, production) {
     res.end(body)
     return
   }
-  if (req.method === "GET" && url.pathname in pages) {
-    const filename = pages[url.pathname]
+  if (req.method === "GET" && (url.pathname in pages || isNotesRoute(url.pathname))) {
+    const filename = pages[url.pathname] || "index.html"
     const body = await fs.readFile(path.join(webDir, filename))
     const headers = {
       "content-type": types[path.extname(filename)] || "application/octet-stream",

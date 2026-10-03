@@ -498,8 +498,7 @@ function [
   at note
   to saved
   set state note [ get saved ]
-  set state section notes
-  get render
+  get visitNotes
   call
  ]
 ]

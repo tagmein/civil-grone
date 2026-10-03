@@ -375,9 +375,10 @@ export function createUi(theme = themeMidnight) {
     pageSize: config.pageSize as number,
     total: config.total as number,
     editable: Boolean(config.editable),
+    archived: Array.isArray(config.archived) ? (config.archived as boolean[]) : undefined,
     onSort: (sort) => void guard(config.onSort)(sort),
     onFilter: (filters) => void guard(config.onFilter)(filters),
-    onPage: (page) => void guard(config.onPage)(page),
+    onPage: typeof config.onPage === "function" ? (page: number) => void guard(config.onPage)(page) : undefined,
     selectedIndex: typeof config.selectedIndex === "number" ? config.selectedIndex : undefined,
     onSelectRow: (index) => void guard(config.onSelectRow)(index),
     onCellEdit: (row, columnName, value) => void guard(config.onCellEdit)(row, columnName, value),
@@ -431,6 +432,96 @@ export function id() {
  return crypto.randomUUID()
 }
 
+const connectionStorageKey = "civil-grone.connectionId"
+
+function normalizePath(pathname: string) {
+ const trimmed = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname
+ try {
+  return decodeURIComponent(trimmed)
+ } catch {
+  return trimmed
+ }
+}
+
+export function readRoute() {
+ if (typeof location === "undefined") {
+  return { section: "", noteId: "" }
+ }
+ const match = normalizePath(location.pathname).match(/^\/notes(?:\/([^/]+))?$/)
+ if (!match) {
+  return { section: "", noteId: "" }
+ }
+ return { section: "notes", noteId: match[1] ?? "" }
+}
+
+export function writeRoute(section: string, noteId: string, example: string, mode: string) {
+ if (typeof location === "undefined" || typeof history === "undefined") {
+  return
+ }
+ const safeSection = section || "databases"
+ const id = safeSection === "notes" ? String(noteId ?? "") : ""
+ const demo = safeSection === "examples" ? String(example ?? "") : ""
+ const next = safeSection === "notes" ? (id ? `/notes/${encodeURIComponent(id)}` : "/notes") : "/"
+ const data = { section: safeSection, noteId: id, example: demo }
+ const samePath = normalizePath(location.pathname) === normalizePath(next)
+ const prev = history.state && typeof history.state === "object"
+  ? history.state as { section?: string; noteId?: string; example?: string }
+  : null
+ const sameState = prev?.section === data.section && (prev?.noteId ?? "") === data.noteId && (prev?.example ?? "") === data.example
+ if (samePath && sameState) {
+  return
+ }
+ if (mode === "replace") {
+  history.replaceState(data, "", next)
+  return
+ }
+ history.pushState(data, "", next)
+}
+
+export function onRoute(handler: unknown) {
+ if (typeof window === "undefined") {
+  return
+ }
+ window.addEventListener("popstate", () => {
+  const route = readRoute()
+  const stored = history.state && typeof history.state === "object"
+   ? history.state as { section?: string; example?: string }
+   : {}
+  if (route.section === "notes") {
+   void guard(handler)("notes", route.noteId, "")
+   return
+  }
+  void guard(handler)(String(stored.section || "databases"), "", String(stored.example || ""))
+ })
+}
+
+export function readConnectionId() {
+ try {
+  if (typeof localStorage === "undefined") {
+   return ""
+  }
+  return localStorage.getItem(connectionStorageKey) ?? ""
+ } catch {
+  return ""
+ }
+}
+
+export function writeConnectionId(id: string) {
+ try {
+  if (typeof localStorage === "undefined") {
+   return
+  }
+  const text = String(id ?? "")
+  if (text) {
+   localStorage.setItem(connectionStorageKey, text)
+  } else {
+   localStorage.removeItem(connectionStorageKey)
+  }
+ } catch {
+  // Selection still works for this session when storage is blocked.
+ }
+}
+
 export function schemaNodes(schema: { tables?: { name: string; columns: { name: string; type: string }[] }[] }) {
  return (schema?.tables ?? []).map((table) => ({
   id: table.name,
@@ -449,22 +540,70 @@ export function tableId(value: string) {
  return dot === -1 ? text : text.slice(0, dot)
 }
 
-export function noteNodes(notes: { id: string; title: string }[]) {
- return (notes ?? []).map((note) => ({ id: note.id, label: note.title || "Untitled" }))
+export function noteNodes(
+ notes: { id: string; title: string; archived?: number | boolean }[],
+ mode?: string,
+) {
+ return (notes ?? []).filter((note) => {
+  const archived = note.archived === true || note.archived === 1
+  if (mode === "only") {
+   return archived
+  }
+  if (mode === "show") {
+   return true
+  }
+  return !archived
+ }).map((note) => {
+  const title = note.title || "Untitled"
+  const archived = note.archived === true || note.archived === 1
+  return {
+   id: note.id,
+   label: archived ? `${title} (archived)` : title,
+  }
+ })
+}
+
+type ArchiveView = "hide" | "show" | "only"
+
+function archiveViewOf(value: unknown): ArchiveView {
+ if (value === "show" || value === "only") {
+  return value
+ }
+ return "hide"
+}
+
+function archiveFlags(rows: unknown[], archived: unknown) {
+ const flags = Array.isArray(archived) ? archived : []
+ return rows.map((_, index) => flags[index] === true || flags[index] === 1)
+}
+
+function emptyDataset() {
+ return {
+  columns: [] as { name: string; type?: string }[],
+  rows: [] as unknown[][],
+  sort: [] as { column: string; direction: string }[],
+  filters: [] as { column: string; op: string; value?: string; join?: string }[],
+  sourceSql: "",
+  archived: [] as boolean[],
+  archiveView: "hide" as ArchiveView,
+ }
 }
 
 export function parseDataset(body: string) {
  try {
   const parsed = JSON.parse(body || "{}")
+  const rows = Array.isArray(parsed.rows) ? parsed.rows : []
   return {
    columns: Array.isArray(parsed.columns) ? parsed.columns : [],
-   rows: Array.isArray(parsed.rows) ? parsed.rows : [],
+   rows,
    sort: Array.isArray(parsed.sort) ? parsed.sort : [],
    filters: Array.isArray(parsed.filters) ? parsed.filters : [],
    sourceSql: typeof parsed.sourceSql === "string" ? parsed.sourceSql : "",
+   archived: archiveFlags(rows, parsed.archived),
+   archiveView: archiveViewOf(parsed.archiveView),
   }
  } catch {
-  return { columns: [], rows: [], sort: [], filters: [], sourceSql: "" }
+  return emptyDataset()
  }
 }
 
@@ -496,9 +635,22 @@ export function visibleRows(dataset: {
  rows?: unknown[][]
  sort?: { column: string; direction: string }[]
  filters?: { column: string; op: string; value?: string; join?: string }[]
+ archived?: unknown[]
+ archiveView?: unknown
 }) {
  const columns = dataset?.columns ?? []
- let rows = (dataset?.rows ?? []).slice()
+ const source = dataset?.rows ?? []
+ const flags = archiveFlags(source, dataset?.archived)
+ const view = archiveViewOf(dataset?.archiveView)
+ let rows = source.filter((_, index) => {
+  if (view === "only") {
+   return flags[index]
+  }
+  if (view === "show") {
+   return true
+  }
+  return !flags[index]
+ })
  const groups = new Map<string, { op: string; value?: string; join?: string }[]>()
  for (const filter of dataset?.filters ?? []) {
   const list = groups.get(filter.column) ?? []
@@ -529,6 +681,117 @@ export function visibleRows(dataset: {
   })
  }
  return rows
+}
+
+export function editorRows(dataset: Parameters<typeof visibleRows>[0]) {
+ const source = dataset?.rows ?? []
+ const flags = archiveFlags(source, dataset?.archived)
+ const rows = visibleRows(dataset)
+ return {
+  rows,
+  archived: rows.map((row) => {
+   const index = source.indexOf(row)
+   return index >= 0 && Boolean(flags[index])
+  }),
+ }
+}
+
+export function archiveViewLabel(view: unknown) {
+ const normalized = archiveViewOf(view)
+ if (normalized === "show") {
+  return "Show archived"
+ }
+ if (normalized === "only") {
+  return "Only archived"
+ }
+ return "Hide archived"
+}
+
+export function datasetSourceIndex(rows: unknown[] | undefined, row: unknown) {
+ if (!Array.isArray(rows) || !Array.isArray(row)) {
+  return -1
+ }
+ return rows.indexOf(row)
+}
+
+export function shownRowIndex(shown: unknown[] | undefined, source: unknown[] | undefined, sourceIndex: unknown) {
+ if (typeof sourceIndex !== "number" || !Array.isArray(shown) || !Array.isArray(source)) {
+  return -1
+ }
+ const row = source[sourceIndex]
+ if (!Array.isArray(row)) {
+  return -1
+ }
+ return shown.indexOf(row)
+}
+
+export function datasetRowPicked(dataset: { rows?: unknown[] } | null, sourceIndex: unknown) {
+ const rows = dataset?.rows ?? []
+ return typeof sourceIndex === "number" && sourceIndex >= 0 && sourceIndex < rows.length
+}
+
+export function rowArchived(dataset: { rows?: unknown[]; archived?: unknown[] } | null, sourceIndex: unknown) {
+ const rows = dataset?.rows ?? []
+ if (typeof sourceIndex !== "number" || sourceIndex < 0 || sourceIndex >= rows.length) {
+  return false
+ }
+ return archiveFlags(rows, dataset?.archived)[sourceIndex]
+}
+
+export function editDatasetCell(
+ dataset: { columns?: { name: string }[]; rows?: unknown[][] },
+ sourceIndex: number,
+ columnName: string,
+ value: string,
+) {
+ const row = dataset?.rows?.[sourceIndex]
+ if (!Array.isArray(row)) {
+  return dataset
+ }
+ const columnIndex = (dataset.columns ?? []).findIndex((column) => column.name === columnName)
+ if (columnIndex < 0) {
+  return dataset
+ }
+ row[columnIndex] = value
+ return dataset
+}
+
+export function addDatasetRow(dataset: {
+ columns?: { name?: string }[]
+ rows?: unknown[][]
+ archived?: boolean[]
+ archiveView?: ArchiveView
+}) {
+ const columns = dataset?.columns ?? []
+ if (columns.length === 0) {
+  return -1
+ }
+ const rows = dataset.rows ?? []
+ const flags = archiveFlags(rows, dataset.archived)
+ rows.push(columns.map(() => ""))
+ flags.push(false)
+ dataset.rows = rows
+ dataset.archived = flags
+ if (archiveViewOf(dataset.archiveView) === "only") {
+  dataset.archiveView = "show"
+ }
+ return rows.length - 1
+}
+
+export function toggleDatasetArchive(dataset: { rows?: unknown[][]; archived?: boolean[] }, sourceIndex: number) {
+ const rows = dataset?.rows ?? []
+ if (sourceIndex < 0 || sourceIndex >= rows.length) {
+  return false
+ }
+ const flags = archiveFlags(rows, dataset.archived)
+ flags[sourceIndex] = !flags[sourceIndex]
+ dataset.archived = flags
+ return flags[sourceIndex]
+}
+
+export function setArchiveView(dataset: { archiveView?: ArchiveView }, view: unknown) {
+ dataset.archiveView = archiveViewOf(view)
+ return dataset.archiveView
 }
 
 function matchColumn(cell: unknown, filters: { op: string; value?: string; join?: string }[]) {

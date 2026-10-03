@@ -26,6 +26,8 @@ set state [ object [
  grid null
  sqlText 'SELECT 1'
  notes [ list ]
+ archiveFilter hide
+ datasetPick [ object ]
  note null
  stepErrors [ object ]
  stepErrorBanner ''
@@ -113,18 +115,15 @@ function [
  get starry
  at renderHome
  call [ get shell, at main ] [ get ui ] [ function [
-  set state section databases
-  get render
+  get visit
+  call databases '' push
+ ] ] [ function [
+  get visitNotes
   call
  ] ] [ function [
-  set state section notes
-  get render
-  call
- ] ] [ function [
-  set state section examples
   set state example ''
-  get render
-  call
+  get visit
+  call examples '' push
  ] ]
 ]
 to renderHome
@@ -156,9 +155,7 @@ function title blocks [
   get notes
   at saveNote
   call
-  set state section notes
-  set state example ''
-  get render
+  get visitNotes
   call
   get pipeline
   at runFrom
@@ -182,20 +179,16 @@ function [
  get starry
  at renderExamples
  call [ get shell, at main ] [ get ui ] [ function [
-  set state section home
-  set state example ''
-  get render
-  call
+  get visit
+  call home '' push
  ] ] [ function [
-  set state section examples
   set state example ''
-  get render
-  call
+  get visit
+  call examples '' push
  ] ] [ function id [
-  set state section examples
   set state example [ get id ]
-  get render
-  call
+  get visit
+  call examples '' push
  ] ] [ function title blocks [
   get importExample
   call [ get title ] [ get blocks ]
@@ -213,10 +206,8 @@ function [
  get ui
  at button
  call Home [ function [
-  set state section home
-  set state example ''
-  get render
-  call
+  get visit
+  call home '' push
  ] ]
  to homeNav
  get ui
@@ -244,9 +235,8 @@ function [
  get ui
  at button
  call Databases [ function [
-  set state section databases
-  get render
-  call
+  get visit
+  call databases '' push
  ] ]
  to databasesButton
  get ui
@@ -255,8 +245,7 @@ function [
  get ui
  at button
  call Notes [ function [
-  set state section notes
-  get render
+  get visitNotes
   call
  ] ]
  to notesButton
@@ -266,10 +255,9 @@ function [
  get ui
  at button
  call Examples [ function [
-  set state section examples
   set state example ''
-  get render
-  call
+  get visit
+  call examples '' push
  ] ]
  to examplesButton
  get ui
@@ -376,7 +364,83 @@ function id [
   at name
   to foundName
   set state connectionName [ get foundName ]
+  get starry
+  at writeConnectionId
+  call [ get id ]
  ]
+]
+to useConnection
+
+function section noteId mode [
+ set state section [ get section ]
+ get section
+ is examples
+ false [
+  set state example ''
+ ]
+ get section
+ is notes
+ true [
+  set state routeNoteId [ get noteId ]
+ ]
+ false [
+  unset state routeNoteId
+ ]
+ get starry
+ at writeRoute
+ call [ get section ] [ get noteId ] [ get state, at example ] [ get mode ]
+ get render
+ call
+]
+to visit
+
+function [
+ get state
+ at note
+ is null
+ to missing
+ pick [
+ get missing
+ value ''
+ to noteId
+ ] [
+ true
+ get state
+ at note
+ at id
+ to noteId
+ ]
+ get visit
+ call notes [ get noteId ] push
+]
+to visitNotes
+
+function section noteId example [
+ set state section [ get section ]
+ get section
+ is examples
+ true [
+  set state example [ get example ]
+ ]
+ false [
+  set state example ''
+ ]
+ get section
+ is notes
+ true [
+  set state routeNoteId [ get noteId ]
+ ]
+ false [
+  unset state routeNoteId
+ ]
+ get render
+ call
+]
+to applyRoute
+
+function id [
+ get useConnection
+ call [ get id ]
  get render
  call
 ]
@@ -536,6 +600,41 @@ to openRemote
 try [
  get loadConnections
  call
+ get starry
+ at readConnectionId
+ call
+ to storedId
+ get state
+ at connections
+ find [ function item [
+  get item
+  at id
+  is [ get storedId ]
+ ] ]
+ to found
+ get found
+ is undefined
+ false [
+  get useConnection
+  call [ get storedId ]
+ ]
+ get starry
+ at readRoute
+ call
+ to route
+ get route
+ at section
+ is notes
+ true [
+  set state section notes
+  set state routeNoteId [ get route, at noteId ]
+ ]
+ get starry
+ at writeRoute
+ call [ get state, at section ] [ get state, at routeNoteId ] '' replace
+ get starry
+ at onRoute
+ call [ get applyRoute ]
  get render
  call
 ] [
