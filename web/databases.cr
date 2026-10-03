@@ -129,20 +129,45 @@ function [
  at databaseNodes
  call [ get state, at connections ] [ get state, at tables ] [ get state, at connectionId ]
  to nodes
- get starry
- at databaseSelection
- call [ get state, at dbView ] [ get state, at connectionId ] [ get state, at selectedTable ]
- to selected
- get ui
- at tree
- call [ get nodes ] [ get selected ] [ function id [
-  get pickDatabaseNode
-  call [ get id ]
- ] ]
- to navTree
- get ui
- at append
- call [ get state, at navPane ] [ get navTree ]
+ get nodes
+ at length
+ is 0
+ true [
+  get state
+  at connectionId
+  is ''
+  true [
+   get ui
+   at notice
+   call empty 'Select a database.'
+   to emptyNav
+  ]
+  false [
+   get ui
+   at notice
+   call empty 'No tables yet.'
+   to emptyNav
+  ]
+  get ui
+  at append
+  call [ get state, at navPane ] [ get emptyNav ]
+ ]
+ false [
+  get starry
+  at databaseSelection
+  call [ get state, at dbView ] [ get state, at connectionId ] [ get state, at selectedTable ]
+  to selected
+  get ui
+  at tree
+  call [ get nodes ] [ get selected ] [ function id [
+   get pickDatabaseNode
+   call [ get id ]
+  ] ]
+  to navTree
+  get ui
+  at append
+  call [ get state, at navPane ] [ get navTree ]
+ ]
 ]
 to paintNav
 
@@ -182,34 +207,42 @@ function [
  get ui
  at clear
  call [ get state, at gridPane ]
- get starry
- at schemaNodes
- call [ object [
-  tables [ get state, at tables ]
- ] ]
- to nodes
- get nodes
- at length
- is 0
+ get state
+ at selectedTable
+ is ''
  true [
   get ui
   at notice
-  call empty 'No tables yet.'
+  call empty 'Select a table.'
   to emptySchema
   get ui
   at append
   call [ get state, at gridPane ] [ get emptySchema ]
  ]
  false [
-  get ui
-  at tree
-  call [ get nodes ] '' [ function id [
-   get id
+  get state
+  at tables
+  find [ function item [
+   get item
+   at name
+   is [ get state, at selectedTable ]
   ] ]
-  to schemaTree
-  get ui
-  at append
-  call [ get state, at gridPane ] [ get schemaTree ]
+  to found
+  get found
+  is undefined
+  true [
+   get ui
+   at notice
+   call empty 'No columns.'
+   to emptySchema
+   get ui
+   at append
+   call [ get state, at gridPane ] [ get emptySchema ]
+  ]
+  false [
+   get paintColumnEditor
+   call [ get found ]
+  ]
  ]
 ]
 to paintSchema
@@ -241,12 +274,7 @@ function id [
    call [ get node, at connectionId ]
   ]
   set state dbView [ get node, at view ]
-  get node
-  at view
-  is schema
-  false [
-   set state selectedTable [ get node, at table ]
-  ]
+  set state selectedTable [ get node, at table ]
   get node
   at table
   is ''
@@ -305,6 +333,10 @@ function [
  ]
  false [
   get starry
+  at tableSummaries
+  call [ get state, at connectionId ] [ get state, at selectedTable ]
+  to summaries
+  get starry
   at api
   call 'databases/rows' [ object [
    connectionId [ get state, at connectionId ]
@@ -313,6 +345,7 @@ function [
    filters [ get state, at filters ]
    page [ get state, at page ]
    pageSize 100
+   summaries [ get summaries ]
   ] ]
   to grid
   set state grid [ get grid ]
@@ -407,6 +440,7 @@ function [
    get saveCell
    call [ get rowIndex ] [ get column ] [ get value ]
   ] ]
+  summary [ get state, at grid, at summary ]
  ] ]
  to gridTable
  get ui
@@ -638,6 +672,184 @@ function [
  ]
 ]
 to pinGrid
+
+function table [
+ get ui
+ at column
+ call
+ to editor
+ get table
+ at type
+ is view
+ to locked
+ get table
+ at columns
+ each [ function column [
+  get ui
+  at line
+  call
+  to line
+  get ui
+  at text
+  call [ template '%0 %1' [ get column, at name ] [ get column, at type ] ]
+  to label
+  get ui
+  at append
+  call [ get line ] [ get label ]
+  get starry
+  at columnSummary
+  call [ get state, at connectionId ] [ get state, at selectedTable ] [ get column, at name ]
+  to currentSummary
+  get starry
+  at summaryChoice
+  call [ get ui ] [ get column, at type ] [ get currentSummary ] [ function value [
+   get saveSummary
+   call [ get column, at name ] [ get value ]
+  ] ]
+  to summaryControl
+  get summaryControl
+  is null
+  false [
+   get ui
+   at append
+   call [ get line ] [ get summaryControl ]
+  ]
+  get locked
+  false [
+   get ui
+   at button
+   call Remove [ function [
+    get confirmDropColumn
+    call [ get column, at name ]
+   ] ]
+   to removeButton
+   get ui
+   at append
+   call [ get line ] [ get removeButton ]
+  ]
+  get ui
+  at append
+  call [ get editor ] [ get line ]
+ ] ]
+ get locked
+ false [
+  get ui
+  at line
+  call
+  to addLine
+  get ui
+  at field
+  call Name [ get state, at columnName ] [ function value [
+   set state columnName [ get value ]
+  ] ]
+  to nameField
+  get ui
+  at append
+  call [ get addLine ] [ get nameField ]
+  get starry
+  at columnTypeChoice
+  call [ get ui ] [ get state, at columnType ] [ function value [
+   set state columnType [ get value ]
+  ] ]
+  to typeChoice
+  get ui
+  at append
+  call [ get addLine ] [ get typeChoice ]
+  get ui
+  at button
+  call Add [ function [
+   get addColumn
+   call
+  ] ]
+  to addButton
+  get ui
+  at append
+  call [ get addLine ] [ get addButton ]
+  get ui
+  at append
+  call [ get editor ] [ get addLine ]
+ ]
+ get ui
+ at append
+ call [ get state, at gridPane ] [ get editor ]
+]
+to paintColumnEditor
+
+function name action [
+ get starry
+ at writeColumnSummary
+ call [ get state, at connectionId ] [ get state, at selectedTable ] [ get name ] [ get action ]
+]
+to saveSummary
+
+function [
+ get starry
+ at api
+ call 'databases/mutate' [ object [
+  connectionId [ get state, at connectionId ]
+  action addColumn
+  table [ get state, at selectedTable ]
+  name [ get state, at columnName ]
+  type [ get state, at columnType ]
+ ] ]
+ set state columnName ''
+ get refreshSchema
+ call
+]
+to addColumn
+
+function name [
+ get ui
+ at dialog
+ call 'Remove column'
+ to confirm
+ get ui
+ at notice
+ call info [ template 'Remove %0 from %1? Values stored in that column will be deleted.' [ get name ] [ get state, at selectedTable ] ]
+ to confirmMessage
+ get ui
+ at append
+ call [ get confirm, at panel ] [ get confirmMessage ]
+ get ui
+ at button
+ call Cancel [ function [
+  get confirm
+  at close
+  call
+ ] ]
+ to cancelButton
+ get ui
+ at append
+ call [ get confirm, at panel ] [ get cancelButton ]
+ get ui
+ at button
+ call Remove [ function [
+  get confirm
+  at close
+  call
+  get starry
+  at api
+  call 'databases/mutate' [ object [
+   connectionId [ get state, at connectionId ]
+   action dropColumn
+   table [ get state, at selectedTable ]
+   column [ get name ]
+  ] ]
+  get starry
+  at writeColumnSummary
+  call [ get state, at connectionId ] [ get state, at selectedTable ] [ get name ] ''
+  get refreshSchema
+  call
+ ] ]
+ to confirmButton
+ get ui
+ at append
+ call [ get confirm, at panel ] [ get confirmButton ]
+ get confirm
+ at open
+ call
+]
+to confirmDropColumn
 
 object [
  render [ get renderDatabases ]
