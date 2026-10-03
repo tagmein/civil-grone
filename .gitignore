@@ -125,6 +125,12 @@ dist
 # Stores Visual Studio Code versions used for testing Visual Studio Code extensions
 .vscode-test
 
+# Local databases and connection registry
+/data
+
+# Generated StarryUI bundle
+/web/starry.mjs
+
 # pnpm
 .pnpm-store
 
@@ -147,3 +153,6 @@ vite.config.ts.timestamp-*
 
 # Turbo Repo
 .turbo
+
+# Generated static files for Vercel (index.html, main.mjs, clipped crown.mjs)
+/public

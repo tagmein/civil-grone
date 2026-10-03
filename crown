@@ -1,0 +1,1199 @@
+#!/usr/bin/node
+import fs from "fs/promises"
+import path from "path"
+
+globalThis.debug = process.env.CROWN_DEBUG === "1"
+globalThis.fs = fs
+globalThis.import = async (x) => await import(x)
+globalThis.path = path
+
+globalThis.basePath = globalThis.basePath ?? process.cwd()
+
+setTimeout(async function () {
+ const args = process.argv.slice(2)
+ if (args[0] === "-e") {
+  if (args.length < 2) {
+   console.error("crown: -e option requires an argument")
+   process.exit(1)
+  }
+  try {
+   await crown().run(args[1])
+  } catch (e) {
+   console.error(11, "Error in script")
+   console.error(12, e.message)
+   process.exit(1)
+  }
+ } else {
+  const files = args.length > 0 ? args : ["repl.cr"]
+
+  Promise.all(
+   files.map(async (file) => {
+    try {
+     await crown().runFile(file)
+    } catch (e) {
+     console.error(11, `Error in ${file}`)
+     console.error(12, e.message)
+     process.exit(1)
+    }
+   }),
+  ).catch(async (e) => {
+   console.error(13, e.message)
+   process.exit(1)
+  })
+ }
+})
+
+/* UNIFIED */ let crownId = 0
+
+const debug = globalThis.debug
+
+const _fs = globalThis.fs ?? {
+ async readFile(p) {
+  return (await fetch(p)).text()
+ },
+}
+const _path = globalThis.path ?? {
+ dirname(p) {
+  return p.split("/").slice(0, -1).join("/")
+ },
+ join(a, b) {
+  const result = [a.replace(/^\//, ""), b.replace(/^\.\//, "")].join("/")
+  if (a[0] === "/" && result[0] !== "." && result[0] !== "/") {
+   return "/" + result
+  }
+  return result
+ },
+}
+
+if (globalThis?.location?.pathname) {
+ globalThis.basePath = globalThis.basePath ?? _path.dirname(globalThis.location.pathname)
+}
+
+const END = {
+ name: "end",
+}
+
+const COMMENT = {
+ name: "comment",
+ "\n"(control) {
+  control.statement.push("#")
+  control.queueToStatement()
+  control.statementToBlock()
+  return INITIAL
+ },
+}
+
+const STRING_ESCAPE = {
+ name: "string_escape",
+ "\\"(control) {
+  control.queue += "\\"
+  return STRING
+ },
+ "'"(control) {
+  control.queue += "'"
+  return STRING
+ },
+}
+
+const STRING = {
+ name: "string",
+ "\\"(control) {
+  return STRING_ESCAPE
+ },
+ "'"(control) {
+  control.statement.push(control.queue)
+  control.queue = ""
+  return INITIAL
+ },
+}
+
+const MACRO = Symbol("macro")
+const SPREAD = Symbol("spread")
+
+const INITIAL = {
+ end(control) {
+  control.queueToStatement()
+  control.statementToBlock()
+  return END
+ },
+ name: "script",
+ " "(control) {
+  control.queueToStatement()
+ },
+ "\r"() {},
+ "\n"(control) {
+  control.queueToStatement()
+  control.statementToBlock()
+ },
+ ","(control) {
+  control.queueToStatement()
+  control.statementToBlock()
+ },
+ "#"(control) {
+  control.queueToStatement()
+  control.statementToBlock()
+  return COMMENT
+ },
+ "'"(control) {
+  control.queueToStatement()
+  return STRING
+ },
+ "["(control) {
+  control.queueToStatement()
+  control.block = []
+  control.prefix += "["
+  control.stack.push(control.block)
+  control.statement.push(control.block)
+  control.statementStack.push(control.statement)
+  control.statement = []
+ },
+ "]"(control) {
+  if (control.stack.length <= 1 || control.stack[control.stack.length - 1][0] === MACRO) {
+   throw new Error("Unexpected ] character")
+  }
+  control.queueToStatement()
+  control.statementToBlock()
+  control.stack.pop()
+  control.block = control.stack[control.stack.length - 1]
+  if (control.prefix[control.prefix.length - 1] !== "[") {
+   throw new Error("no matching opening [ found")
+  }
+  control.prefix = control.prefix.slice(0, control.prefix.length - 1)
+  control.statement = control.statementStack.pop()
+ },
+ "("(control) {
+  control.queueToStatement()
+  control.block = [MACRO]
+  control.prefix += "("
+  control.stack.push(control.block)
+  control.statement.push(control.block)
+  control.statementStack.push(control.statement)
+  control.statement = []
+ },
+ ")"(control) {
+  if (control.stack.length <= 1 || control.stack[control.stack.length - 1][0] !== MACRO) {
+   throw new Error("Unexpected ) character")
+  }
+  if (control.prefix[control.prefix.length - 1] !== "(") {
+   throw new Error("no matching opening ( found")
+  }
+  control.prefix = control.prefix.slice(0, control.prefix.length - 1)
+  control.queueToStatement()
+  control.statementToBlock()
+  control.stack.pop()
+  control.block = control.stack[control.stack.length - 1]
+  control.statement = control.statementStack.pop()
+ },
+}
+
+function parse(primarySource) {
+ const top = []
+ const control = {
+  beginAtIndex: 0,
+  block: top,
+  prefix: "",
+  queue: "",
+  stack: [top],
+  statement: [],
+  statementStack: [],
+  queueToStatement() {
+   if (control.queue.length) {
+    switch (control.queue) {
+     case "null":
+      control.statement.push(null)
+      break
+     case "undefined":
+      control.statement.push(undefined)
+      break
+     case "true":
+      control.statement.push(true)
+      break
+     case "false":
+      control.statement.push(false)
+      break
+     case "*":
+      control.statement.push(SPREAD)
+      break
+     default:
+      if (String(parseFloat(control.queue)) === control.queue) {
+       control.statement.push(parseFloat(control.queue))
+      } else {
+       control.statement.push(control.queue)
+      }
+    }
+    control.queue = ""
+   }
+  },
+  statementToBlock() {
+   if (control.statement.length) {
+    control.block.push(control.statement)
+    control.statement = []
+   }
+  },
+ }
+ let state = INITIAL
+ function next(source) {
+  for (const charIndex in source) {
+   const char = source[charIndex]
+   if (char in state) {
+    try {
+     const newState = state[char](control)
+     if (newState) {
+      state = newState
+     }
+    } catch (e) {
+     e.message = e.message + ` at ${charIndex}, ${JSON.stringify(source.substring(charIndex, charIndex + 20))}`
+     throw e
+    }
+    control.beginAtIndex = charIndex
+   } else {
+    control.queue += char
+   }
+  }
+  if (state === STRING) {
+   return { complete: false, next, prefix: `${control.prefix}'` }
+  }
+  if (control.block !== top) {
+   return { complete: false, next, prefix: control.prefix }
+  }
+  if (control.queue.length > 0) {
+   if (!("end" in state)) {
+    throw new Error(`Unterminated ${state.name} at ${control.beginAtIndex}-${source.length}`)
+   }
+   state = state.end(control)
+  }
+  return { complete: true, value: top, prefix: control.prefix }
+ }
+ return next(primarySource)
+}
+
+const SCOPE = {
+ PARENT: Symbol("SCOPE:PARENT"),
+}
+
+function uncrown(value) {
+ return typeof value?.current === "function" ? value.current() : value
+}
+
+const EXPANSION_PLACEHOLDERS = []
+
+function recursiveExtract(statement, expansionCounter, expansions = []) {
+ const template = []
+ for (const word of statement) {
+  if (Array.isArray(word)) {
+   if (word[0] === MACRO) {
+    const expansionId = expansionCounter.count
+    expansionCounter.count++
+    if (!(expansionId in EXPANSION_PLACEHOLDERS)) {
+     EXPANSION_PLACEHOLDERS[expansionId] = Symbol(`Expansion ${expansionId}`)
+    }
+    template.push(EXPANSION_PLACEHOLDERS[expansionId])
+    expansions[expansionId] = word.slice(1)
+    // console.log(`SET EXPANSION ${expansionId}`);
+   } else {
+    const [_, t] = recursiveExtract(word, expansionCounter, expansions)
+    template.push(t)
+   }
+  } else {
+   template.push(word)
+  }
+ }
+ return [expansions, template]
+}
+
+function applyExpansions(template, expansions) {
+ return template.reduce((final, word) => {
+  if (Array.isArray(word)) {
+   final.push(applyExpansions(word, expansions))
+   return final
+  }
+  const expansionIndex = typeof word === "symbol" ? EXPANSION_PLACEHOLDERS.indexOf(word) : -1
+  if (expansionIndex === -1) {
+   final.push(word)
+   return final
+  }
+  return final.concat(expansions[expansionIndex])
+ }, [])
+}
+
+function extractMacroStatements(statement) {
+ const [expansions, template] = recursiveExtract(statement, { count: 0 })
+ if (expansions.length === 0) {
+  return [statement]
+ }
+ const result = expansions[0].map((_, i) =>
+  applyExpansions(
+   template,
+   expansions.map((e) => e?.[i]),
+  ),
+ )
+ // console.log(
+ //   `Here I got ${expansions.length} expansions`,
+ //   expansions,
+ //   template,
+ //   "from statement",
+ //   statement,
+ //   "resulting in",
+ //   result
+ // );
+ return result
+}
+
+function processCrownList(crowns) {
+ let final = []
+ let flatNext = false
+ for (const c of crowns.map(uncrown)) {
+  if (c === SPREAD) {
+   if (flatNext) {
+    throw new Error("Unexpected *")
+   }
+   flatNext = true
+  } else if (flatNext) {
+   if (!Array.isArray(c)) {
+    throw new Error(`Expected list after *, got ${typeof c}`)
+   }
+   flatNext = false
+   final = final.concat(c)
+  } else {
+   final.push(c)
+  }
+ }
+ if (flatNext) {
+  throw new Error("Unexpected *")
+ }
+ return final
+}
+
+function crown(context = globalThis, names = new Map(), basePath = globalThis.basePath) {
+ let currentError
+ let currentValue = context
+ let parseNext
+ let lastComment
+ let blockPrefix = ""
+ let nextBasePath
+ let currentBasePath
+ function read(name, ...nameSegments) {
+  let value = undefined
+  let searchScope = names
+  while (searchScope.has(SCOPE.PARENT)) {
+   if (searchScope.has(name)) {
+    break
+   }
+   searchScope = searchScope.get(SCOPE.PARENT)
+  }
+  if (!searchScope.has(name)) {
+   return
+   // todo add required flag?
+   // throw new Error(`name ${JSON.stringify(name)} is not set`)
+  }
+  value = searchScope.get(name)
+  for (const segment of nameSegments) {
+   if (typeof value === "undefined" || value === null) {
+    throw new Error(`cannot get '${segment}' of ${value}`)
+   }
+   const test = typeof value === "object" || typeof value === "function" ? value : Object.getPrototypeOf(value)
+   if (!test.hasOwnProperty?.(segment) && (typeof test !== "object" || !(segment in test))) {
+    value = undefined
+    continue
+   }
+   if (typeof value[segment] === "function") {
+    value = value[segment].bind(value)
+   } else {
+    value = value[segment]
+   }
+  }
+  return value
+ }
+ const me = {
+  id: crownId++,
+  "#"(comment) {
+   lastComment = comment
+   return me
+  },
+  async "<"(argumentCrown) {
+   const arg = uncrown(argumentCrown)
+   currentValue = currentValue < arg
+  },
+  async "<="(argumentCrown) {
+   const arg = uncrown(argumentCrown)
+   currentValue = currentValue <= arg
+  },
+  async "="(argumentCrown) {
+   const arg = uncrown(argumentCrown)
+   currentValue = currentValue === arg
+  },
+  async ">"(argumentCrown) {
+   const arg = uncrown(argumentCrown)
+   currentValue = currentValue > arg
+  },
+  async ">="(argumentCrown) {
+   const arg = uncrown(argumentCrown)
+   currentValue = currentValue >= arg
+  },
+  add(...argumentListRaw) {
+   const argumentList = processCrownList(argumentListRaw)
+   currentValue = argumentList.reduce((sum, x) => sum + x, typeof currentValue === "number" ? currentValue : 0)
+  },
+  all(...argumentListRaw) {
+   const argumentList = processCrownList(argumentListRaw)
+   currentValue = argumentList.reduce((result, x) => result && x, true)
+  },
+  any(...argumentListRaw) {
+   const argumentList = processCrownList(argumentListRaw)
+   currentValue = argumentList.reduce((result, x) => result || x, false)
+  },
+  at(...path) {
+   let isFirstSegment = true
+   for (const segment of path) {
+    if (typeof segment === "string" || typeof segment === "number") {
+     if (currentValue === undefined || currentValue === null) {
+      throw new Error(`cannot read '${segment}' of ${currentValue}`)
+     }
+     const test = typeof currentValue === "object" || typeof currentValue === "function" ? currentValue : Object.getPrototypeOf(currentValue)
+     if (segment in test) {
+      const nextValue = currentValue[segment]
+      if (typeof nextValue === "function" && currentValue !== globalThis) {
+       currentValue = currentValue[segment].bind(currentValue)
+      } else {
+       currentValue = currentValue[segment]
+      }
+     } else {
+      currentValue = undefined
+      break
+     }
+    } else {
+     const candidate = uncrown(segment)
+     if (isFirstSegment) {
+      currentValue = candidate
+     } else {
+      if (typeof currentValue === "string" && typeof segment === "number") {
+       currentValue = currentValue[segment]
+      } else {
+       const test = typeof currentValue === "object" || typeof currentValue === "function" ? currentValue : Object.getPrototypeOf(currentValue)
+       if (currentValue && candidate in test) {
+        const nextValue = currentValue[candidate]
+        if (typeof nextValue === "function") {
+         currentValue = currentValue[candidate].bind(currentValue)
+        } else {
+         currentValue = currentValue[candidate]
+        }
+       } else {
+        currentValue = undefined
+        break
+       }
+      }
+     }
+    }
+    isFirstSegment = false
+   }
+   return me
+  },
+  async call(...argumentListRaw) {
+   const argumentList = processCrownList(argumentListRaw)
+   if (typeof currentValue !== "function") {
+    throw new Error(`Expecting value to be a function, but got: ${typeof currentValue}`)
+   }
+   try {
+    const result = await currentValue(...argumentList)
+    // Check if the result is a crown scope with an error
+    if (result && typeof result._check_error === 'function') {
+     const nestedError = result._check_error()
+     if (nestedError !== undefined) {
+      currentError = new Error(nestedError)
+      currentValue = undefined
+      return me
+     }
+    }
+    currentValue = uncrown(result)
+   } catch (e) {
+    currentError = e
+    currentValue = undefined
+    // Rethrow to stop execution - currentError is now set and accessible
+    throw e
+   }
+   return me
+  },
+  async will(...argumentListRaw) {
+   const argumentList = processCrownList(argumentListRaw)
+   if (typeof currentValue !== "function") {
+    throw new Error(`Expecting value to be a function, but got: ${typeof currentValue}`)
+   }
+   try {
+    const functionReference = currentValue
+    if (typeof functionReference !== 'function') {
+      throw new Error(`will expects function, got ${typeof currentValue}`)
+    }
+    currentValue = async function () {
+      return uncrown(await functionReference(...argumentList))
+    }
+   } catch (e) {
+    currentError = e
+    currentValue = undefined
+   }
+   return me
+  },
+  clear_error() {
+   currentError = undefined
+   return me
+  },
+  current_error() {
+   // Get error message and set it as currentValue (for use in Crown code)
+   // Returns the error message or undefined
+   const errorMsg = currentError ? (currentError?.message ?? String(currentError)) : undefined
+   currentValue = errorMsg
+   return errorMsg
+  },
+  _check_error() {
+   // Internal: check if there's an error without modifying currentValue
+   // Used for error propagation checking
+   return currentError ? (currentError?.message ?? String(currentError)) : undefined
+  },
+  get_error() {
+   // Get the error message from either the current error or a saved block error (from try)
+   // Sets the error message as currentValue
+   const error = me._lastBlockError ?? currentError
+   const errorMsg = error ? (error?.message ?? String(error)) : undefined
+   currentValue = errorMsg
+   currentError = undefined  // Clear any current error so execution continues
+   return me
+  },
+  clone(name, nextBasePath) {
+   const newNames = new Map()
+   newNames.set(SCOPE.PARENT, names)
+   const newCrown = crown(currentValue, newNames, nextBasePath ?? currentBasePath ?? basePath)
+   if (typeof name === "string") {
+    me.set_raw(name, newCrown)
+   }
+   return newCrown
+  },
+  comment() {
+   return lastComment
+  },
+  current() {
+   return currentValue
+  },
+  default(crownValue) {
+   const value = uncrown(crownValue)
+   if (currentValue === null || currentValue === undefined || (typeof currentValue === "number" && isNaN(currentValue))) {
+    currentValue = value
+   }
+   return me
+  },
+  divide(...argumentListRaw) {
+   const argumentList = processCrownList(argumentListRaw)
+   currentValue = argumentList.reduce((product, x) => product / x, typeof currentValue === "number" ? currentValue : 1)
+  },
+  do() {
+   return me
+  },
+  async each(callbackCrown) {
+   if (!Array.isArray(currentValue)) {
+    throw new Error(`each command requires current value to be an Array, got ${typeof currentValue}`)
+   }
+   const callback = uncrown(callbackCrown)
+   const result = []
+   for (let index = 0; index < currentValue.length; index++) {
+    result.push(uncrown(await callback(currentValue[index], index)))
+   }
+   currentValue = result
+   return me
+  },
+  async entries() {
+   if (!currentValue || typeof currentValue !== "object") {
+    throw new Error(`entries command requires current value to be an object, got ${typeof currentValue}`)
+   }
+   currentValue = Object.entries(currentValue)
+   return me
+  },
+  async error(...messages) {
+   throw new Error(messages.join(" "))
+  },
+  async false(instructionCrown) {
+   if (instructionCrown) {
+    if (!currentValue) {
+     const clonedCrown = me.clone(undefined, currentBasePath ?? basePath)
+     await clonedCrown.walk(uncrown(instructionCrown))
+     // Propagate errors from the cloned scope
+     const nestedError = clonedCrown._check_error()
+     if (nestedError !== undefined) {
+      currentError = new Error(nestedError)
+     }
+    }
+   } else {
+    currentValue = false
+   }
+  },
+  async filter(argumentCrown) {
+   if (!Array.isArray(currentValue)) {
+    throw new Error('Can only use "filter" when current value is an Array')
+   }
+   const callback = uncrown(argumentCrown)
+   const filteredValue = []
+   await Promise.all(
+    currentValue.map(async (x) => {
+     if (await uncrown(await callback(x))) {
+      filteredValue.push(x)
+     }
+    }),
+   )
+   currentValue = filteredValue
+   return me
+  },
+  async find(argumentCrown) {
+   if (!Array.isArray(currentValue)) {
+    throw new Error('Can only use "find" when current value is an Array')
+   }
+   const callback = uncrown(argumentCrown)
+   for (let i = 0; i < currentValue.length; i++) {
+    if (await uncrown(await callback(currentValue[i], i))) {
+     currentValue = currentValue[i]
+     return me
+    }
+   }
+   currentValue = undefined
+   return me
+  },
+  function(...argumentNames) {
+   const functionImplementation = argumentNames.pop()
+   currentValue = async function (...runtimeArguments) {
+    const scopeCrown = me.clone(undefined, currentBasePath ?? basePath)
+    for (const index in argumentNames) {
+     scopeCrown.set(argumentNames[index], runtimeArguments[index])
+    }
+    await scopeCrown.walk(functionImplementation)
+    return scopeCrown
+   }
+   return me
+  },
+  get(...nameSegments) {
+   currentValue = read(...nameSegments)
+   return me
+  },
+  async global(name, ...nameSegments) {
+   if (typeof name === "undefined") {
+    return globalThis
+   }
+   let searchScope = globalThis
+   if (!(name in searchScope)) {
+    currentValue = undefined
+    return
+    // todo add required flag?
+    // throw new Error(`name ${JSON.stringify(name)} is not set`)
+   }
+   currentValue = searchScope[name]
+   for (const segment of nameSegments) {
+    if (typeof currentValue === "undefined" || currentValue === null) {
+     throw new Error(`cannot get '${segment}' of ${currentValue}`)
+    }
+    const test = typeof currentValue === "object" || typeof currentValue === "function" ? currentValue : Object.getPrototypeOf(currentValue)
+    if (!test.hasOwnProperty?.(segment) && (typeof test !== "object" || !(segment in test))) {
+     currentValue = undefined
+     continue
+    }
+    if (typeof currentValue[segment] === "function") {
+     currentValue = currentValue[segment].bind(currentValue)
+    } else {
+     currentValue = currentValue[segment]
+    }
+   }
+   return me
+  },
+  async group(groupByExpression) {
+   if (!Array.isArray(currentValue)) {
+    throw new Error(`group command requires current value to be an Array, got ${typeof currentValue}`)
+   }
+   const groups = {}
+   const functionCrown = me.clone(undefined, currentBasePath ?? basePath)
+   await functionCrown.walk(groupByExpression)
+   const itemGroupFunction = await uncrown(functionCrown)
+   await Promise.all(
+    currentValue.map(async (item) => {
+     const itemGroup = await uncrown(await itemGroupFunction(item))
+     if (!(itemGroup in groups)) {
+      groups[itemGroup] = []
+     }
+     groups[itemGroup].push(item)
+    }),
+   )
+   currentValue = groups
+   return me
+  },
+  async is(argumentCrown) {
+   const arg = uncrown(argumentCrown)
+   currentValue = currentValue === arg
+  },
+  it() {
+   return currentValue
+  },
+  async list(...argumentListRaw) {
+   currentValue = []
+   for (const arg of argumentListRaw) {
+    const val = uncrown(arg)
+    if (Array.isArray(val)) {
+     for (const statement of val) {
+      if (Array.isArray(statement)) {
+       const scope = me.clone(undefined, currentBasePath ?? basePath)
+       await scope.walk([statement])
+       currentValue.push(scope.current())
+      } else {
+       currentValue.push(statement)
+      }
+     }
+    } else {
+     currentValue.push(val)
+    }
+   }
+   return me
+  },
+  async load(_filePath, basePathOverride = currentBasePath ?? basePath ?? globalThis.basePath) {
+   const filePath = uncrown(_filePath)
+   const finalPath = _path.join(basePathOverride, filePath)
+   nextBasePath = _path.dirname(finalPath)
+   const content = await _fs.readFile(finalPath, "utf-8")
+   try {
+    const fileModule = eval(`(
+     function () {
+     return async function ${filePath.replace(/[^a-zA-Z]+/g, "_")} (scope) {
+     const { complete, value } = parse(${JSON.stringify(content)})
+     if (!complete) {
+       throw new Error('unterminated block')
+     }
+     await scope.walk(value)
+     return scope
+     }})()`)
+    currentValue = fileModule
+   } catch (e) {
+    currentError = e
+    console.error(1, e.message)
+    throw e
+   }
+   return me
+  },
+  log(...argumentListRaw) {
+   console.log(...processCrownList(argumentListRaw))
+  },
+  async map(argumentCrown) {
+   if (!Array.isArray(currentValue)) {
+    throw new Error('Can only use "map" when current value is an Array')
+   }
+   const callback = uncrown(argumentCrown)
+   currentValue = await Promise.all(currentValue.map(async (x) => uncrown(await callback(x))))
+   return me
+  },
+  multiply(...argumentListRaw) {
+   const argumentList = processCrownList(argumentListRaw)
+   currentValue = argumentList.reduce((product, x) => product * x, typeof currentValue === "number" ? currentValue : 1)
+  },
+  names() {
+   currentValue = names
+   return me
+  },
+  new(...argumentListRaw) {
+   const argumentList = processCrownList(argumentListRaw)
+   currentValue = new currentValue(...argumentList)
+   return me
+  },
+  not() {
+   currentValue = !currentValue
+   return me
+  },
+  async object(definition = []) {
+   currentValue = {}
+   for (const entry of definition) {
+    const [k, v] = entry
+    if (entry.length === 1) {
+     currentValue[k] = read(k)
+     continue
+    }
+    if (Array.isArray(v)) {
+     const scope = me.clone(undefined, currentBasePath ?? basePath)
+     currentValue[k] = (await scope.walk(v)).current()
+    } else {
+     currentValue[k] = v
+    }
+   }
+   return me
+  },
+  async pick(...x) {
+   for (const [condition, ...block] of x) {
+    const conditionResult = uncrown(await me.clone(undefined, currentBasePath ?? basePath).walk([condition]))
+    if (conditionResult) {
+     await me.walk(block)
+     break
+    }
+   }
+   return me
+  },
+  async point() {
+   if (typeof currentValue !== "function") {
+    throw new Error(`current value must be function, got ${typeof currentValue}`)
+   }
+   // When pointing to a loaded module, use the directory of that file as the base path for its inner loads
+   const targetBasePath = nextBasePath ?? currentBasePath ?? basePath;
+   const finalCrown = await currentValue(me.clone(undefined, targetBasePath))
+   currentValue = finalCrown.current()
+   return me
+  },
+  get prefix() {
+   return blockPrefix
+  },
+  async prepend(...commands) {
+   const statements = commands.pop()
+   for (const statement of statements) {
+    const [prefix, ...rest] = statement[0]
+    const compound = [commands.concat(prefix)].concat(rest)
+    await me.walk(compound)
+   }
+   return me
+  },
+  async promise(handler) {
+   try {
+    currentValue = await new Promise(uncrown(handler))
+   } catch (e) {
+    currentError = e
+    console.error(2, "error in promise", e.message)
+   }
+   return me
+  },
+  regexp(...argumentListRaw) {
+   const [definition, flags] = processCrownList(argumentListRaw)
+   currentValue = new RegExp(definition, flags)
+   return me
+  },
+  async run(_source) {
+   const source = Array.isArray(_source) ? _source[0] : _source
+   const rawSource = uncrown(source)
+   try {
+    const { complete, next, value, prefix } = (parseNext ?? parse)(rawSource)
+    parseNext = next
+    blockPrefix = prefix
+    if (complete) {
+     return me.walk(value)
+    }
+   } catch (e) {
+    console.log(e.message)
+    return
+   }
+  },
+  async runFile(source, basePath = globalThis.basePath) {
+   const filePath = basePath.length === 0 || source.startsWith("/") ? source : _path.join(basePath, source)
+   currentBasePath = basePath = _path.dirname(filePath)
+   const contents = await _fs.readFile(filePath, "utf-8")
+   return me.run([contents])
+  },
+  async runScript(scopeCrown, sourceCrown, basePathCrown) {
+   const scope = uncrown(scopeCrown)
+   const rawSource = uncrown(sourceCrown)
+   const runBasePath = basePathCrown ? uncrown(basePathCrown) : undefined
+   const cloned = me.clone(undefined, runBasePath)
+   if (scope && typeof scope === "object" && !Array.isArray(scope)) {
+    for (const [k, v] of Object.entries(scope)) {
+     cloned.set(k, crown().value(v))
+    }
+   }
+   try {
+    const { complete, value, prefix } = parse(typeof rawSource === "string" ? rawSource : String(rawSource))
+    if (!complete) {
+     console.error("runScript: unterminated block. Prefix:", prefix, "Raw Source:", rawSource)
+     throw new Error("runScript: unterminated block")
+    }
+    return cloned.walk(value)
+   } catch (e) {
+    cloned.currentError = e
+    console.error("runScript", e.message)
+    return cloned
+   }
+  },
+  async runJsonFile(source) {
+   return me.walk(crown().at("require").call(crown().value(source)))
+  },
+  set(...pathCrowns) {
+   const p = pathCrowns.map(uncrown)
+   const value = p.pop()
+   const name = p.pop()
+   if (p.length) {
+    if (typeof p[0] === "string" || typeof p[0] === "number") {
+     p[0] = me.get(p[0])
+    }
+    const context = uncrown(me.at(...p))
+    if (context === "null") {
+     throw new Error(`cannot set property "${name}" of null`)
+    }
+    if (typeof context !== "object") {
+     throw new Error(`cannot set property "${name}" of ${typeof context}`)
+    }
+    context[name] = uncrown(value)
+   } else {
+    names.set(name, uncrown(value))
+   }
+   return me
+  },
+  set_raw(...p) {
+   const value = p.pop()
+   const name = p.pop()
+   if (p.length) {
+    const context = uncrown(me.at(...p))
+    if (context === "null") {
+     throw new Error(`cannot set property "${name}" of null`)
+    }
+    if (typeof context !== "object") {
+     throw new Error(`cannot set property "${name}" of ${typeof context}`)
+    }
+    context[name] = value
+   } else {
+    names.set(name, value)
+   }
+   return me
+  },
+  subtract(...argumentListRaw) {
+   const argumentList = processCrownList(argumentListRaw)
+   currentValue = argumentList.reduce((sum, x) => sum - x, typeof currentValue === "number" ? currentValue : 0)
+  },
+  async tell(...argumentListRaw) {
+   const argumentList = processCrownList(argumentListRaw)
+   if (typeof currentValue !== "function") {
+    throw new Error(`Expecting value to be a function, but got: ${typeof currentValue}`)
+   }
+   await currentValue(...argumentList)
+   return me
+  },
+  async tap() {
+   if (typeof currentValue !== "function") {
+    throw new Error(`current value must be function, got ${typeof currentValue}`)
+   }
+   const finalCrown = await currentValue(me)
+   currentValue = finalCrown.current()
+   return me
+  },
+  async try(block, onError) {
+   // Clear error state before running block
+   const savedError = currentError
+   currentError = undefined
+   await me.walk(block)
+   // If an error occurred during the block, run the error handler
+   if (currentError) {
+    // Save the error for get_error to access, but clear currentError
+    // so the error handler can actually run
+    const blockError = currentError
+    currentError = undefined
+    // Store error in a special location for get_error
+    me._lastBlockError = blockError
+    await me.walk(onError)
+    me._lastBlockError = undefined
+    // Error has been handled, leave currentError cleared
+   } else {
+    // Restore previous error state if block succeeded
+    currentError = savedError
+   }
+   return me
+  },
+  typeof(...ignored) {
+   if (ignored.length > 0) {
+    throw new Error(`typeof command does not accept arguments, got ${ignored.length}`)
+   }
+   currentValue = typeof currentValue
+  },
+  template(template, ...parameterCrowns) {
+   const parameters = processCrownList(parameterCrowns)
+   currentValue = template.replace(/%(\d+)/g, function (_, index) {
+    return parameters[parseInt(index, 10)]
+   })
+   return me
+  },
+  to(...pathCrowns) {
+   const p = pathCrowns.map(uncrown)
+   const name = p.pop()
+   if (p.length) {
+    const context = uncrown(me.at(...p))
+    if (context === "null") {
+     throw new Error(`cannot set property "${name}" of null`)
+    }
+    if (typeof context !== "object") {
+     throw new Error(`cannot set property "${name}" of ${typeof context}`)
+    }
+    context[name] = uncrown(currentValue)
+   } else {
+    names.set(name, uncrown(currentValue))
+   }
+   return me
+  },
+  toString() {
+   const currentValueString = Array.isArray(currentValue) ? `Array (${currentValue.length})` : String(currentValue)
+   const currentValueDescription = currentValueString.length > 0 ? currentValueString : currentValue?.constructor?.name
+   return `crown with ${typeof currentValue}: ${currentValueDescription}`
+  },
+  async true(instructionCrown) {
+   if (instructionCrown) {
+    if (currentValue) {
+     const clonedCrown = me.clone(undefined, currentBasePath ?? basePath)
+     await clonedCrown.walk(uncrown(instructionCrown))
+     // Propagate errors from the cloned scope
+     const nestedError = clonedCrown._check_error()
+     if (nestedError !== undefined) {
+      currentError = new Error(nestedError)
+     }
+    }
+   } else {
+    currentValue = true
+   }
+  },
+  unset(...pathCrowns) {
+   const p = pathCrowns.map(uncrown)
+   const name = p.pop()
+   if (p.length) {
+    if (typeof p[0] === "string" || typeof p[0] === "number") {
+     p[0] = me.get(p[0])
+    }
+    const context = uncrown(me.at(...p))
+    if (context === "null") {
+     throw new Error(`cannot unset property "${name}" of null`)
+    }
+    if (typeof context !== "object") {
+     throw new Error(`cannot unset property "${name}" of ${typeof context}`)
+    }
+    delete context[name]
+   } else {
+    names.delete(name)
+   }
+   return me
+  },
+  async loop(...blockCrowns) {
+   // loop a block as long as [ current ] is defined
+   while (typeof currentValue !== "undefined") {
+    for (const b of blockCrowns) {
+     await me.walk(b)
+    }
+   }
+  },
+  drop(...conditionCrowns) {
+   // set current to undefined if any block returns true (keep if all return false)
+   if (conditionCrowns.map(uncrown).some((x) => x)) {
+    currentValue = undefined
+   }
+   return me
+  },
+  keep(...conditionCrowns) {
+   // set current to undefined if all blocks return false (keep if any return true)
+   if (conditionCrowns.map(uncrown).every((x) => !x)) {
+    currentValue = undefined
+   }
+   return me
+  },
+  value(newValue) {
+   currentValue = newValue
+   return me
+  },
+  async walk(instructionsCrown) {
+   if (currentError) {
+    return me
+   }
+   const instructions = uncrown(instructionsCrown)
+   if (!Array.isArray(instructions)) {
+    throw new Error(`walk expects an Array, got: ${typeof instructions}`)
+   }
+   if (instructions.length === 0) {
+    return me
+   }
+   const wrappedInstructions = Array.isArray(instructions[0]) ? instructions : [instructions]
+   for (const statementIndex in wrappedInstructions) {
+    if (currentError) {
+     // console.log("stop walk due to error")
+     break
+    }
+    const statement = wrappedInstructions[statementIndex]
+    if (!Array.isArray(statement)) {
+     throw new Error(`walk[${statementIndex}] expects an Array, got: ${typeof statement}`)
+    }
+    async function runStatement(statement) {
+     const [command, ...args] = statement
+     if (!(command in me)) {
+      throw new Error(`walk[${statementIndex}]: "${command}" is not a valid operation`)
+     }
+     if (debug) {
+      if (args.length > 0) {
+       console.debug(`crown ${me.id} ${command}`, args)
+      } else {
+       console.debug(`crown ${me.id} ${command}`)
+      }
+     }
+     const automaticWalk =
+      {
+       false: false,
+       function: false,
+       group: false,
+       list: false,
+       loop: false,
+       object: false,
+       pick: false,
+       prepend: false,
+       true: false,
+       try: false,
+      }[command] ?? true
+     try {
+      const finalArguments = await Promise.all(args.map(async (x) => {
+       if (currentError) {
+        return undefined
+       }
+       if (automaticWalk && Array.isArray(x)) {
+        const clonedCrown = me.clone(undefined, currentBasePath ?? basePath)
+        await clonedCrown.walk(x)
+        // Propagate errors from cloned/nested Crown instances to parent
+        // Use _check_error() to avoid modifying currentValue
+        const nestedErrorMsg = clonedCrown._check_error()
+        if (nestedErrorMsg !== undefined) {
+         currentError = new Error(nestedErrorMsg)
+         return undefined
+        }
+        return uncrown(clonedCrown.current())
+       }
+       return x
+      }))
+      if (currentError) {
+       return
+      }
+      try {
+       await me[command](...finalArguments)
+       if (currentError) {
+        return
+       }
+      } catch (e) {
+       currentError = e
+       console.error(3, `Error in ${command}`, finalArguments.map(uncrown))
+       console.error(4, "Current value", currentValue)
+       console.error(5, e.message)
+       console.error(6, "Error occurred at:", ...wrappedInstructions.slice(0, statementIndex), wrappedInstructions[statementIndex])
+       return
+      }
+     } catch (e) {
+      // Only set currentError if it's not already set (from nested Crown error)
+      if (!currentError) {
+       currentError = e
+      }
+      console.error(7, `Error computing arguments for ${command}`, args)
+      console.error(8, "Current value", currentValue)
+      console.error(9, e.message)
+      console.error(10, "Error occurred at:", ...wrappedInstructions.slice(0, statementIndex), wrappedInstructions[statementIndex])
+      return
+     }
+    }
+    if (statement.find((x) => Array.isArray(x) && x[0] === MACRO)) {
+     for (const stmt of extractMacroStatements(statement)) {
+      await runStatement(stmt)
+      if (currentError) {
+       break
+      }
+     }
+    } else {
+     // console.log("NO MACRO", ...statement);
+     await runStatement(statement)
+    }
+    if (currentError) {
+     break
+    }
+   }
+   return me
+  },
+ }
+ names.set("runScript", me.runScript.bind(me))
+ return me
+}
