@@ -3,8 +3,9 @@ function [
  at clear
  call [ get shell, at main ]
  get state
- at connectionId
- is ''
+ at connections
+ at length
+ is 0
  true [
   get ui
   at notice
@@ -22,21 +23,13 @@ function [
 to renderDatabases
 
 function [
- get starry
- at api
- call 'databases/schema' [ object [
-  connectionId [ get state, at connectionId ]
- ] ]
- at tables
- to tables
- set state tables [ get tables ]
  get ui
  at split
  call column 0.62
  to vertical
  get ui
  at split
- call row 0.28
+ call row 0.24
  to horizontal
  get ui
  at append
@@ -44,25 +37,9 @@ function [
  get ui
  at append
  call [ get shell, at main ] [ get vertical, at element ]
- set state schemaPane [ get horizontal, at start ]
+ set state navPane [ get horizontal, at start ]
  set state gridPane [ get horizontal, at end ]
  set state sqlPane [ get vertical, at end ]
- get starry
- at schemaNodes
- call [ object [
-  tables [ get state, at tables ]
- ] ]
- to nodes
- get ui
- at tree
- call [ get nodes ] [ get state, at selectedTable ] [ function id [
-  get pickNode
-  call [ get id ]
- ] ]
- to schemaTree
- get ui
- at append
- call [ get state, at schemaPane ] [ get schemaTree ]
  get ui
  at column
  call
@@ -117,30 +94,198 @@ function [
  get ui
  at append
  call [ get state, at sqlPane ] [ get sqlColumn ]
- get loadRows
- call
-]
-to buildBrowser
-
-function id [
- get starry
- at tableId
- call [ get id ]
- to tableName
- get tableName
- is [ get state, at selectedTable ]
+ get state
+ at connectionId
+ is ''
+ true [
+  set state tables [ list ]
+  get paintNav
+  call
+  get paintContent
+  call
+ ]
  false [
-  set state selectedTable [ get tableName ]
-  set state page 0
-  set state sort [ list ]
-  set state filters [ list ]
-  set state selectedIndex null
-  set state selectedRow null
-  get loadRows
+  get starry
+  at api
+  call 'databases/schema' [ object [
+   connectionId [ get state, at connectionId ]
+  ] ]
+  at tables
+  to tables
+  set state tables [ get tables ]
+  get paintNav
+  call
+  get paintContent
   call
  ]
 ]
-to pickNode
+to buildBrowser
+
+function [
+ get ui
+ at clear
+ call [ get state, at navPane ]
+ get starry
+ at databaseNodes
+ call [ get state, at connections ] [ get state, at tables ] [ get state, at connectionId ]
+ to nodes
+ get starry
+ at databaseSelection
+ call [ get state, at dbView ] [ get state, at connectionId ] [ get state, at selectedTable ]
+ to selected
+ get ui
+ at tree
+ call [ get nodes ] [ get selected ] [ function id [
+  get pickDatabaseNode
+  call [ get id ]
+ ] ]
+ to navTree
+ get ui
+ at append
+ call [ get state, at navPane ] [ get navTree ]
+]
+to paintNav
+
+function [
+ get state
+ at connectionId
+ is ''
+ true [
+  get ui
+  at clear
+  call [ get state, at gridPane ]
+  get ui
+  at notice
+  call empty 'Select a database.'
+  to emptyMain
+  get ui
+  at append
+  call [ get state, at gridPane ] [ get emptyMain ]
+ ]
+ false [
+  get state
+  at dbView
+  is schema
+  true [
+   get paintSchema
+   call
+  ]
+  false [
+   get loadRows
+   call
+  ]
+ ]
+]
+to paintContent
+
+function [
+ get ui
+ at clear
+ call [ get state, at gridPane ]
+ get starry
+ at schemaNodes
+ call [ object [
+  tables [ get state, at tables ]
+ ] ]
+ to nodes
+ get nodes
+ at length
+ is 0
+ true [
+  get ui
+  at notice
+  call empty 'No tables yet.'
+  to emptySchema
+  get ui
+  at append
+  call [ get state, at gridPane ] [ get emptySchema ]
+ ]
+ false [
+  get ui
+  at tree
+  call [ get nodes ] '' [ function id [
+   get id
+  ] ]
+  to schemaTree
+  get ui
+  at append
+  call [ get state, at gridPane ] [ get schemaTree ]
+ ]
+]
+to paintSchema
+
+function id [
+ get starry
+ at readDatabaseNode
+ call [ get id ]
+ to node
+ get node
+ at connectionId
+ is ''
+ false [
+  get node
+  at connectionId
+  is [ get state, at connectionId ]
+  to sameDb
+  get node
+  at table
+  is [ get state, at selectedTable ]
+  to sameTable
+  get state
+  at dbView
+  is [ get node, at view ]
+  to sameView
+  get sameDb
+  false [
+   get useConnection
+   call [ get node, at connectionId ]
+  ]
+  set state dbView [ get node, at view ]
+  get node
+  at view
+  is schema
+  false [
+   set state selectedTable [ get node, at table ]
+  ]
+  get node
+  at table
+  is ''
+  false [
+   get sameTable
+   false [
+    set state page 0
+    set state sort [ list ]
+    set state filters [ list ]
+    set state selectedIndex null
+    set state selectedRow null
+   ]
+  ]
+  get sameDb
+  false [
+   get render
+   call
+  ]
+  true [
+   get sameTable
+   false [
+    get paintNav
+    call
+    get paintContent
+    call
+   ]
+   true [
+    get sameView
+    false [
+     get paintNav
+     call
+     get paintContent
+     call
+    ]
+   ]
+  ]
+ ]
+]
+to pickDatabaseNode
 
 function [
  get state
@@ -330,8 +475,8 @@ function [
  at columns
  each [ function column [
   get ui
-  at field
-  call [ get column, at name ] '' [ function value [
+  at columnField
+  call [ get column, at name ] [ get column, at type ] '' [ function value [
    set column draft [ get value ]
   ] ]
   to control
@@ -402,25 +547,15 @@ function [
  at tables
  to tables
  set state tables [ get tables ]
- get starry
- at schemaNodes
- call [ object [
-  tables [ get state, at tables ]
- ] ]
- to nodes
- get ui
- at clear
- call [ get state, at schemaPane ]
- get ui
- at tree
- call [ get nodes ] [ get state, at selectedTable ] [ function id [
-  get pickNode
-  call [ get id ]
- ] ]
- to schemaTree
- get ui
- at append
- call [ get state, at schemaPane ] [ get schemaTree ]
+ get paintNav
+ call
+ get state
+ at dbView
+ is schema
+ true [
+  get paintSchema
+  call
+ ]
 ]
 to refreshSchema
 

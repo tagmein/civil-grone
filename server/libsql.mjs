@@ -208,8 +208,16 @@ async function readRows(client, body) {
     sql: `${sourceSql} LIMIT ? OFFSET ?`,
     args: [...where.args, pageSize, page * pageSize],
   })
+  const packed = pack(result, pageSize)
   return ok({
-    ...pack(result, pageSize),
+    ...packed,
+    columns: packed.columns.map((column) => {
+      const declared = table.columns.find((item) => item.name === column.name)
+      return {
+        ...column,
+        type: declared?.type || column.type,
+      }
+    }),
     sort,
     filters,
     sourceSql,
@@ -498,7 +506,7 @@ async function saveNote(client, body) {
     for (let index = 0; index < blocks.length; index += 1) {
       const block = blocks[index]
       const kind = text(block?.kind)
-      if (!["markdown", "crown", "javascript", "sql", "dataset"].includes(kind)) {
+      if (!["markdown", "crown", "javascript", "sql", "select", "dataset"].includes(kind)) {
         throw new Error(`unknown block kind ${kind}`)
       }
       await tx.execute({

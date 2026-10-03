@@ -210,6 +210,8 @@ INSERT INTO orders (id, customer_id, total) VALUES (10, 1, 5), (11, 2, 9);`,
     const grid = JSON.parse(rows.body)
     assert.equal(grid.rows.length, 1)
     assert.deepEqual(grid.columns.map((column) => column.name), ["id", "name", "active"])
+    assert.equal(grid.columns.find((column) => column.name === "id").type, "INTEGER")
+    assert.equal(grid.columns.find((column) => column.name === "name").type, "TEXT")
     assert.equal(grid.editable, true)
     assert.match(grid.sourceSql, /ORDER BY "name" asc/)
     assert.equal(grid.rows[0][1], "Ada")

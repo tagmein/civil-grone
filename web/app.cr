@@ -4,12 +4,12 @@ to starry
 
 get starry
 at shell
-call [ get starry, at themeMidnight ]
+call
 to shell
 
 get starry
 at createUi
-call [ get starry, at themeMidnight ]
+call
 to ui
 
 set state [ object [
@@ -18,6 +18,7 @@ set state [ object [
  connectionId ''
  connectionName 'No database'
  connections [ list ]
+ dbView data
  tables [ list ]
  selectedTable ''
  sort [ list ]
@@ -28,6 +29,7 @@ set state [ object [
  notes [ list ]
  archiveFilter hide
  datasetPick [ object ]
+ datasetConflict [ object ]
  note null
  stepErrors [ object ]
  stepErrorBanner ''
@@ -298,6 +300,16 @@ function [
  get ui
  at append
  call [ get shell, at tray ] [ get newButton ]
+ get ui
+ at themeSwitcher
+ call [ function [
+  get render
+  call
+ ] ]
+ to themeButton
+ get ui
+ at append
+ call [ get shell, at tray ] [ get themeButton ]
  get starry
  at clearScreen
  call [ get shell, at main ]
@@ -439,6 +451,7 @@ function section noteId example [
 to applyRoute
 
 function id [
+ set state dbView data
  get useConnection
  call [ get id ]
  get render

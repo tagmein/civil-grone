@@ -107,6 +107,15 @@ function index [
    set block output [ get output ]
   ]
   get kind
+  is select
+  true [
+   get starry
+   at applySelect
+   call [ get bindings, at previous ] [ get block, at body ]
+   to output
+   set block output [ get output ]
+  ]
+  get kind
   is dataset
   true [
    get refreshDataset
@@ -148,11 +157,35 @@ function block [
   call [ get data, at sourceSql ]
   to output
   get starry
-  at stringifyDataset
-  call [ get output ]
-  to nextBody
-  set block body [ get nextBody ]
-  set block output [ get output ]
+  at conflictView
+  call [ get data ] [ object [
+   columns [ get output, at columns ]
+   rows [ get output, at rows ]
+   cursor 0
+   choices [ object ]
+  ] ]
+  to view
+  get view
+  at applied
+  is null
+  true [
+   set state datasetConflict [ get block, at id ] [ object [
+    columns [ get output, at columns ]
+    rows [ get output, at rows ]
+    cursor 0
+    choices [ object ]
+   ] ]
+   set block output null
+  ]
+  false [
+   unset state datasetConflict [ get block, at id ]
+   get starry
+   at stringifyDataset
+   call [ get view, at applied ]
+   to nextBody
+   set block body [ get nextBody ]
+   set block output null
+  ]
  ]
 ]
 to refreshDataset
