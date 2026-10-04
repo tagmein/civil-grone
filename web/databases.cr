@@ -686,6 +686,8 @@ function table [
  at column
  call
  to editor
+ set editor style gap 'var(--dimension2)'
+ set editor style padding 'var(--dimension2) var(--dimension3)'
  get table
  at type
  is view
