@@ -1,5 +1,5 @@
 get request
 to request
 get db
-at query
+at authInvites
 call [ get request ]

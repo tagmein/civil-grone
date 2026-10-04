@@ -140,12 +140,15 @@ async function handleRequest(req, res, production) {
       return
     }
     const routePath = url.pathname === "/api" ? "" : decodeURIComponent(url.pathname.slice("/api/".length))
+    const forwarded = req.headers["x-forwarded-proto"]
+    const proto = typeof forwarded === "string" && forwarded ? forwarded.split(",")[0].trim() : "http"
     const result = await handleApi({
       method: req.method,
       path: routePath,
       query: parseQuery(url.searchParams),
       headers: lowerHeaders(req.headers),
       body,
+      origin: `${proto}://${req.headers.host || "localhost"}`,
     }, { production, root })
     res.writeHead(result.status, result.headers)
     res.end(result.body)

@@ -1,5 +1,5 @@
 get request
 to request
 get db
-at query
+at authLogin
 call [ get request ]

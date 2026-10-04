@@ -2,6 +2,9 @@ import { createClient } from "@libsql/client"
 import { randomUUID } from "crypto"
 import fs from "fs/promises"
 import path from "path"
+import { createAccounts, ensureAccountSchema } from "./accounts.mjs"
+
+const accounts = createAccounts()
 
 const MAX_ROWS = 500
 const DEFAULT_PAGE_SIZE = 100
@@ -15,18 +18,59 @@ export function createDb(root) {
     list: () => listConnections(connectionsFile),
     create: (body) => createConnection(connectionsFile, databasesDir, body),
     remove: (body) => removeConnection(connectionsFile, body),
-    schema: (body) => withConnection(connectionsFile, body, (client) => readSchema(client)),
-    rows: (body) => withConnection(connectionsFile, body, (client) => readRows(client, body)),
-    query: (body) => withConnection(connectionsFile, body, (client) => runScript(client, body)),
-    mutate: (body) => withConnection(connectionsFile, body, (client) => mutate(client, body)),
-    notesList: (body) => withConnection(connectionsFile, body, (client) => listNotes(client)),
-    notesGet: (body) => withConnection(connectionsFile, body, (client) => getNote(client, body)),
-    notesSave: (body) => withConnection(connectionsFile, body, (client) => saveNote(client, body)),
-    notesDelete: (body) => withConnection(connectionsFile, body, (client) => deleteNote(client, body)),
-    notesEnsure: (body) => withConnection(connectionsFile, body, async (client) => {
+    schema: (request) => withUser(connectionsFile, request, (client) => readSchema(client)),
+    rows: (request) => withUser(connectionsFile, request, (client) => readRows(client, request.body)),
+    query: (request) => withUser(connectionsFile, request, (client) => runScript(client, request.body)),
+    mutate: (request) => withUser(connectionsFile, request, (client) => mutate(client, request.body)),
+    notesList: (request) => withUser(connectionsFile, request, (client, user) => listNotes(client, user)),
+    notesGet: (request) => withUser(connectionsFile, request, (client, user) => getNote(client, request.body, user)),
+    notesSave: (request) => withUser(connectionsFile, request, (client, user) => saveNote(client, request.body, user)),
+    notesDelete: (request) => withUser(connectionsFile, request, (client, user) => deleteNote(client, request.body, user)),
+    notesShare: (request) => withUser(connectionsFile, request, (client, user) => shareNote(client, request.body, user)),
+    notesUnshare: (request) => withUser(connectionsFile, request, (client, user) => unshareNote(client, request.body, user)),
+    notesEnsure: (request) => withUser(connectionsFile, request, async (client) => {
       await ensureNotes(client)
       return ok({})
     }),
+    authSession: (request) => withConnection(connectionsFile, request?.body, async (client) => {
+      await ensureNotes(client)
+      return accounts.session(client, request)
+    }),
+    authSignup: (request) => withConnection(connectionsFile, request?.body, async (client) => {
+      await ensureNotes(client)
+      return accounts.signup(client, request)
+    }),
+    authLogin: (request) => withConnection(connectionsFile, request?.body, async (client) => {
+      await ensureNotes(client)
+      return accounts.login(client, request)
+    }),
+    authLogout: (request) => withConnection(connectionsFile, request?.body, async (client) => {
+      await ensureNotes(client)
+      return accounts.logout(client, request)
+    }),
+    authTotpBegin: (request) => withAccount(connectionsFile, request, (client, _user, req) => accounts.totpBegin(client, req)),
+    authTotpConfirm: (request) => withAccount(connectionsFile, request, (client, _user, req) => accounts.totpConfirm(client, req)),
+    authTotpLogin: (request) => withConnection(connectionsFile, request?.body, async (client) => {
+      await ensureNotes(client)
+      return accounts.totpLogin(client, request)
+    }),
+    authWebauthnRegisterOptions: (request) => withAccount(connectionsFile, request, (client, _user, req) => accounts.webauthnRegisterOptions(client, req)),
+    authWebauthnRegisterVerify: (request) => withAccount(connectionsFile, request, (client, _user, req) => accounts.webauthnRegisterVerify(client, req)),
+    authWebauthnLoginOptions: (request) => withConnection(connectionsFile, request?.body, async (client) => {
+      await ensureNotes(client)
+      return accounts.webauthnLoginOptions(client, request)
+    }),
+    authWebauthnLoginVerify: (request) => withConnection(connectionsFile, request?.body, async (client) => {
+      await ensureNotes(client)
+      return accounts.webauthnLoginVerify(client, request)
+    }),
+    authFactorRemove: (request) => withAccount(connectionsFile, request, (client, _user, req) => accounts.factorRemove(client, req)),
+    authProfile: (request) => withAccount(connectionsFile, request, (client, _user, req) => accounts.profile(client, req)),
+    authInvites: (request) => withAccount(connectionsFile, request, (client, _user, req) => accounts.invites(client, req)),
+    authInvitesSend: (request) => withAccount(connectionsFile, request, (client, _user, req) => accounts.invitesSend(client, req)),
+    authInvitesRefill: (request) => withAccount(connectionsFile, request, (client, _user, req) => accounts.invitesRefill(client, req)),
+    authUsers: (request) => withAccount(connectionsFile, request, (client, _user, req) => accounts.users(client, req)),
+    authUsersLimit: (request) => withAccount(connectionsFile, request, (client, _user, req) => accounts.usersLimit(client, req)),
   }
 }
 
@@ -122,6 +166,21 @@ async function removeConnection(file, body) {
   }
   await writeConnections(file, next)
   return ok({ ok: true })
+}
+
+async function withUser(file, request, run) {
+  return withConnection(file, request?.body, async (client) => {
+    await ensureNotes(client)
+    const auth = await accounts.requireUser(client, request)
+    if (auth.response) {
+      return auth.response
+    }
+    return run(client, auth.user)
+  })
+}
+
+async function withAccount(file, request, run) {
+  return withUser(file, request, (client, user) => run(client, user, request))
 }
 
 async function withConnection(file, body, run) {
@@ -548,14 +607,24 @@ async function ensureNotes(client) {
   if (!names.includes("archived")) {
     await client.execute("ALTER TABLE grone_note ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
   }
+  if (!names.includes("owner_id")) {
+    await client.execute("ALTER TABLE grone_note ADD COLUMN owner_id TEXT")
+  }
+  if (!names.includes("created_at")) {
+    await client.execute("ALTER TABLE grone_note ADD COLUMN created_at TEXT NOT NULL DEFAULT ''")
+  }
+  await client.execute("UPDATE grone_note SET created_at = updated_at WHERE created_at IS NULL OR created_at = ''")
+  await ensureAccountSchema(client)
 }
 
-function noteSummary(row) {
+function noteSummary(row, userId) {
+  const ownerId = String(row.owner_id ?? row[4] ?? "")
   return {
     id: String(row.id ?? row[0]),
     title: String(row.title ?? row[1]),
     updated_at: String(row.updated_at ?? row[2]),
     archived: archivedFlag(row.archived ?? row[3]),
+    owned: userId && ownerId === userId ? 1 : 0,
   }
 }
 
@@ -563,32 +632,67 @@ function archivedFlag(value) {
   return value === true || value === 1 || value === 1n || value === "1" ? 1 : 0
 }
 
-async function listNotes(client) {
+async function listNotes(client, user) {
   await ensureNotes(client)
-  const result = await client.execute("SELECT id, title, updated_at, archived FROM grone_note ORDER BY updated_at DESC")
-  return ok({
-    notes: result.rows.map(noteSummary),
+  const result = await client.execute({
+    sql: `SELECT id, title, updated_at, archived, owner_id, created_at FROM grone_note
+      WHERE owner_id = ?
+        OR id IN (SELECT note_id FROM grone_note_share WHERE user_id = ?)
+      ORDER BY updated_at DESC`,
+    args: [user.id, user.id],
   })
+  let notes = result.rows.map((row) => noteSummary(row, user.id))
+  if (user.limited === 1) {
+    const presented = await earliestOwnedId(client, user.id)
+    notes = notes.filter((note) => note.owned !== 1 || note.id === presented)
+  }
+  return ok({ notes })
 }
 
-async function getNote(client, body) {
+async function getNote(client, body, user) {
   await ensureNotes(client)
   const id = text(body?.id)
   const note = await client.execute({
-    sql: "SELECT id, title, updated_at, archived FROM grone_note WHERE id = ?",
+    sql: "SELECT id, title, updated_at, archived, owner_id, created_at FROM grone_note WHERE id = ?",
     args: [id],
   })
   if (note.rows.length === 0) {
     return fail(404, "note not found")
   }
+  const access = await canViewNote(client, user, note.rows[0])
+  if (!access.ok) {
+    return access.response
+  }
   const blocks = await client.execute({
     sql: "SELECT id, position, kind, name, body FROM grone_block WHERE note_id = ? ORDER BY position",
     args: [id],
   })
-  const row = note.rows[0]
+  const collaborators = await client.execute({
+    sql: `SELECT u.id, u.username, u.name
+      FROM grone_note_share s
+      JOIN grone_user u ON u.id = s.user_id
+      WHERE s.note_id = ?
+      ORDER BY u.username`,
+    args: [id],
+  })
+  const ownerId = String(note.rows[0].owner_id ?? "")
+  let owner = null
+  if (ownerId) {
+    const ownerRow = await client.execute({
+      sql: "SELECT id, username, name FROM grone_user WHERE id = ?",
+      args: [ownerId],
+    })
+    if (ownerRow.rows[0]) {
+      owner = {
+        id: String(ownerRow.rows[0].id),
+        username: String(ownerRow.rows[0].username),
+        name: String(ownerRow.rows[0].name),
+      }
+    }
+  }
   return ok({
     note: {
-      ...noteSummary(row),
+      ...noteSummary(note.rows[0], user.id),
       blocks: blocks.rows.map((block) => ({
         id: String(block.id ?? block[0]),
         position: Number(block.position ?? block[1]),
@@ -596,11 +700,17 @@ async function getNote(client, body) {
         name: block.name == null && block[3] == null ? "" : String(block.name ?? block[3]),
         body: String(block.body ?? block[4] ?? ""),
       })),
+      collaborators: collaborators.rows.map((person) => ({
+        id: String(person.id),
+        username: String(person.username),
+        name: String(person.name),
+      })),
+      owner,
     },
   })
 }
 
-async function saveNote(client, body) {
+async function saveNote(client, body, user) {
   await ensureNotes(client)
   const note = body?.note
   const id = text(note?.id)
@@ -610,23 +720,35 @@ async function saveNote(client, body) {
   }
   const blocks = Array.isArray(note?.blocks) ? note.blocks : []
   const updatedAt = new Date().toISOString()
+  const existing = await client.execute({
+    sql: "SELECT id, title, updated_at, archived, owner_id, created_at FROM grone_note WHERE id = ?",
+    args: [id],
+  })
   let archived = archivedFlag(note?.archived)
-  if (note?.archived == null) {
-    const existing = await client.execute({
-      sql: "SELECT archived FROM grone_note WHERE id = ?",
-      args: [id],
-    })
-    if (existing.rows.length > 0) {
-      const row = existing.rows[0]
-      archived = archivedFlag(row.archived ?? row[0])
+  let ownerId = user.id
+  let createdAt = updatedAt
+  if (existing.rows.length > 0) {
+    const access = await canViewNote(client, user, existing.rows[0])
+    if (!access.ok) {
+      return access.response
+    }
+    ownerId = String(existing.rows[0].owner_id ?? user.id)
+    createdAt = String(existing.rows[0].created_at || updatedAt)
+    if (note?.archived == null) {
+      archived = archivedFlag(existing.rows[0].archived)
+    }
+  } else if (user.limited === 1) {
+    const presented = await earliestOwnedId(client, user.id)
+    if (presented) {
+      return fail(400, "A limited account can keep one note")
     }
   }
   const tx = await client.transaction("write")
   try {
     await tx.execute({
-      sql: `INSERT INTO grone_note (id, title, updated_at, archived) VALUES (?, ?, ?, ?)
+      sql: `INSERT INTO grone_note (id, title, updated_at, archived, owner_id, created_at) VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET title = excluded.title, updated_at = excluded.updated_at, archived = excluded.archived`,
-      args: [id, title, updatedAt, archived],
+      args: [id, title, updatedAt, archived, ownerId, createdAt],
     })
     await tx.execute({ sql: "DELETE FROM grone_block WHERE note_id = ?", args: [id] })
     for (let index = 0; index < blocks.length; index += 1) {
@@ -652,15 +774,30 @@ async function saveNote(client, body) {
     await tx.rollback()
     throw error
   }
-  return getNote(client, { id })
+  return getNote(client, { id }, user)
 }
 
-async function deleteNote(client, body) {
+async function deleteNote(client, body, user) {
   await ensureNotes(client)
   const id = text(body?.id)
+  const existing = await client.execute({
+    sql: "SELECT id, title, updated_at, archived, owner_id, created_at FROM grone_note WHERE id = ?",
+    args: [id],
+  })
+  if (existing.rows.length === 0) {
+    return fail(404, "note not found")
+  }
+  const access = await canViewNote(client, user, existing.rows[0])
+  if (!access.ok) {
+    return access.response
+  }
+  if (!access.owned) {
+    return fail(403, "only the owner can delete this note")
+  }
   const tx = await client.transaction("write")
   try {
     await tx.execute({ sql: "DELETE FROM grone_block WHERE note_id = ?", args: [id] })
+    await tx.execute({ sql: "DELETE FROM grone_note_share WHERE note_id = ?", args: [id] })
     await tx.execute({ sql: "DELETE FROM grone_note WHERE id = ?", args: [id] })
     await tx.commit()
   } catch (error) {
@@ -668,6 +805,107 @@ async function deleteNote(client, body) {
     throw error
   }
   return ok({ ok: true })
+}
+
+async function shareNote(client, body, user) {
+  await ensureNotes(client)
+  const id = text(body?.id)
+  const username = text(body?.username)
+  if (!username) {
+    return fail(400, "username is required")
+  }
+  const existing = await client.execute({
+    sql: "SELECT id, title, updated_at, archived, owner_id, created_at FROM grone_note WHERE id = ?",
+    args: [id],
+  })
+  if (existing.rows.length === 0) {
+    return fail(404, "note not found")
+  }
+  const access = await canViewNote(client, user, existing.rows[0])
+  if (!access.ok) {
+    return access.response
+  }
+  if (!access.owned) {
+    return fail(403, "only the owner can invite a collaborator")
+  }
+  const found = await client.execute({
+    sql: "SELECT id FROM grone_user WHERE username = ?",
+    args: [username],
+  })
+  if (found.rows.length === 0) {
+    return fail(404, "user not found")
+  }
+  const collaboratorId = String(found.rows[0].id ?? found.rows[0][0])
+  if (collaboratorId === user.id) {
+    return fail(400, "you already own this note")
+  }
+  await client.execute({
+    sql: `INSERT INTO grone_note_share (note_id, user_id, created_at) VALUES (?, ?, ?)
+      ON CONFLICT(note_id, user_id) DO NOTHING`,
+    args: [id, collaboratorId, new Date().toISOString()],
+  })
+  return getNote(client, { id }, user)
+}
+
+async function unshareNote(client, body, user) {
+  await ensureNotes(client)
+  const id = text(body?.id)
+  const collaboratorId = text(body?.userId)
+  const existing = await client.execute({
+    sql: "SELECT id, title, updated_at, archived, owner_id, created_at FROM grone_note WHERE id = ?",
+    args: [id],
+  })
+  if (existing.rows.length === 0) {
+    return fail(404, "note not found")
+  }
+  const access = await canViewNote(client, user, existing.rows[0])
+  if (!access.ok) {
+    return access.response
+  }
+  if (!access.owned) {
+    return fail(403, "only the owner can remove a collaborator")
+  }
+  await client.execute({
+    sql: "DELETE FROM grone_note_share WHERE note_id = ? AND user_id = ?",
+    args: [id, collaboratorId],
+  })
+  return getNote(client, { id }, user)
+}
+
+async function canViewNote(client, user, row) {
+  const ownerId = String(row.owner_id ?? "")
+  const id = String(row.id ?? "")
+  if (ownerId === user.id) {
+    if (user.limited === 1) {
+      const presented = await earliestOwnedId(client, user.id)
+      if (presented !== id) {
+        return { ok: false, response: fail(404, "note not found") }
+      }
+    }
+    return { ok: true, owned: true }
+  }
+  const share = await client.execute({
+    sql: "SELECT note_id FROM grone_note_share WHERE note_id = ? AND user_id = ?",
+    args: [id, user.id],
+  })
+  if (share.rows.length === 0) {
+    return { ok: false, response: fail(404, "note not found") }
+  }
+  return { ok: true, owned: false }
+}
+
+async function earliestOwnedId(client, userId) {
+  const result = await client.execute({
+    sql: `SELECT id FROM grone_note
+      WHERE owner_id = ?
+      ORDER BY CASE WHEN created_at IS NULL OR created_at = '' THEN updated_at ELSE created_at END ASC, id ASC
+      LIMIT 1`,
+    args: [userId],
+  })
+  if (result.rows.length === 0) {
+    return ""
+  }
+  return String(result.rows[0].id ?? result.rows[0][0])
 }
 
 function pack(result, cap) {

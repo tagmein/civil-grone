@@ -658,17 +658,25 @@ function [
     ]
    ] ]
   ] ]
-  get starry
-  at api
-  call 'notes/save' [ object [
-   connectionId [ get state, at connectionId ]
-   note [ get state, at note ]
-  ] ]
-  at note
-  to saved
-  set state note [ get saved ]
-  get visitNotes
-  call
+  try [
+   get starry
+   at api
+   call 'notes/save' [ object [
+    connectionId [ get state, at connectionId ]
+    note [ get state, at note ]
+   ] ]
+   at note
+   to saved
+   set state note [ get saved ]
+   get visitNotes
+   call
+  ] [
+   get_error
+   to message
+   get shell
+   at setStatus
+   call [ get message ] error
+  ]
  ]
 ]
 to pinGrid

@@ -109,6 +109,7 @@ export async function handleApi(request, { production = false, root = process.cw
     query: request.query ?? {},
     headers: request.headers ?? {},
     body: request.body ?? null,
+    origin: request.origin || "http://localhost",
   }
   const db = createDb(root)
   scope.set("request", crown().value(payload))

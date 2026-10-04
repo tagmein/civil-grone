@@ -18,6 +18,7 @@ import {
  tableSummaries,
  writeColumnSummary,
 } from "./summary.ts"
+import { startAuthentication, startRegistration } from "@simplewebauthn/browser"
 import { button } from "../starryui/packages/button/index.ts"
 import { checkbox, codefield, field, input } from "../starryui/packages/field/index.ts"
 import { paintExamples, paintHome } from "./examples.ts"
@@ -378,6 +379,22 @@ export function createUi(theme = activeTheme) {
     },
    })
   },
+  secret(label: string, value: string, onInput?: unknown) {
+   const control = themedInput.add(
+    withValue(value ?? ""),
+    withOnInput((next) => void guard(onInput)(next)),
+   )()
+   if (control instanceof HTMLInputElement) {
+    control.type = "password"
+    control.autocomplete = "current-password"
+   }
+   return themedField({
+    label,
+    content(container) {
+     container.append(control)
+    },
+   })
+  },
   columnField(label: string, type: string, value: string, onInput?: unknown) {
    const kind = columnInputKind(type)
    const declared = String(type ?? "").trim()
@@ -686,6 +703,7 @@ export function createUi(theme = activeTheme) {
 export async function api(path: string, body?: unknown) {
  const response = await fetch(`/api/${path}`, {
   method: body === undefined ? "GET" : "POST",
+  credentials: "same-origin",
   headers: body === undefined ? undefined : { "content-type": "application/json" },
   body: body === undefined ? undefined : JSON.stringify(body),
  })
@@ -704,6 +722,47 @@ export async function api(path: string, body?: unknown) {
 
 export function id() {
  return crypto.randomUUID()
+}
+
+export async function copyText(value: string) {
+ await navigator.clipboard.writeText(String(value ?? ""))
+}
+
+export function canCreateNote(user: { limited?: number | boolean } | null, notes: { owned?: number | boolean }[] | null) {
+ if (!user || (user.limited !== 1 && user.limited !== true)) {
+  return true
+ }
+ return !(notes ?? []).some((note) => note.owned === 1 || note.owned === true)
+}
+
+export function giveableInvites(invites: { status?: string }[] | null) {
+ return (invites ?? []).filter((item) => item.status !== "used")
+}
+
+export function noteMenu(
+ note: { archived?: number | boolean; owned?: number | boolean } | null,
+ onArchive: unknown,
+ onDelete: unknown,
+ onInvite: unknown,
+) {
+ const archived = note?.archived === 1 || note?.archived === true
+ const owned = note?.owned === 1 || note?.owned === true
+ const items: { label: string; action: unknown }[] = [
+  { label: archived ? "Unarchive" : "Archive", action: onArchive },
+ ]
+ if (owned) {
+  items.push({ label: "Invite collaborator", action: onInvite })
+  items.push({ label: "Delete", action: onDelete })
+ }
+ return items
+}
+
+export async function registerWebAuthn(options: unknown) {
+ return startRegistration({ optionsJSON: options as Parameters<typeof startRegistration>[0]["optionsJSON"] })
+}
+
+export async function authenticateWebAuthn(options: unknown) {
+ return startAuthentication({ optionsJSON: options as Parameters<typeof startAuthentication>[0]["optionsJSON"] })
 }
 
 const connectionStorageKey = "civil-grone.connectionId"
@@ -908,7 +967,7 @@ export function tableId(value: string) {
 }
 
 export function noteNodes(
- notes: { id: string; title: string; archived?: number | boolean }[],
+ notes: { id: string; title: string; archived?: number | boolean; owned?: number | boolean }[],
  mode?: string,
 ) {
  return (notes ?? []).filter((note) => {
@@ -923,9 +982,11 @@ export function noteNodes(
  }).map((note) => {
   const title = note.title || "Untitled"
   const archived = note.archived === true || note.archived === 1
+  const shared = note.owned === 0 || note.owned === false
+  const suffix = archived && shared ? " (shared, archived)" : archived ? " (archived)" : shared ? " (shared)" : ""
   return {
    id: note.id,
-   label: archived ? `${title} (archived)` : title,
+   label: `${title}${suffix}`,
   }
  })
 }

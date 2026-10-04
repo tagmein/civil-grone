@@ -1,5 +1,5 @@
 get request
 to request
 get db
-at query
+at authUsers
 call [ get request ]

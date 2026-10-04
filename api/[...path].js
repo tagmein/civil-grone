@@ -39,12 +39,15 @@ export default async function handler(req, res) {
       res.end("invalid json")
       return
     }
+    const forwarded = req.headers["x-forwarded-proto"]
+    const proto = typeof forwarded === "string" && forwarded ? forwarded.split(",")[0].trim() : "http"
     const result = await handleApi({
       method: req.method || "GET",
       path: apiPath(req),
       query: parseQuery(url.searchParams),
       headers: lowerHeaders(req.headers),
       body,
+      origin: `${proto}://${req.headers.host || "localhost"}`,
     }, { production })
     res.writeHead(result.status, result.headers)
     res.end(result.body)

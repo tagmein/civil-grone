@@ -5,19 +5,34 @@ import os from "os"
 import path from "path"
 import test from "node:test"
 import { clipCrownSource } from "../server/clip.mjs"
+import { totpNow } from "../server/accounts.mjs"
 import { handleApi, parseBody } from "../server/dispatch.mjs"
 import { listen } from "../server/host.mjs"
 
 const root = process.cwd()
 
+let currentSession = ""
+
 function request(routePath, extra = {}) {
+  const headers = { ...(extra.headers ?? {}) }
+  if (currentSession && headers.cookie == null) {
+    headers.cookie = currentSession
+  }
   return handleApi({
     method: extra.method ?? "GET",
     path: routePath,
     query: extra.query ?? {},
-    headers: extra.headers ?? {},
+    headers,
     body: extra.body ?? null,
+    origin: extra.origin,
   }, { production: extra.production ?? false, root })
+}
+
+function sessionCookie(result) {
+  const raw = result.headers["set-cookie"] || ""
+  const match = raw.match(/grone_session=([^;]+)/)
+  assert.ok(match, `missing session cookie: ${raw}`)
+  return `grone_session=${match[1]}`
 }
 
 test("clip keeps the unified runtime and exports crown", async () => {
@@ -148,6 +163,7 @@ test("production server caches crown.mjs and masks handler errors", async () => 
 test("local database supports schema, rows, edits, and notes", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "grone-"))
   process.env.GRONE_DATA_DIR = dataDir
+  currentSession = ""
   try {
     const created = await request("databases/create", {
       method: "POST",
@@ -162,6 +178,22 @@ test("local database supports schema, rows, edits, and notes", async () => {
     const listed = await request("databases/list")
     assert.equal(listed.status, 200)
     assert.equal(JSON.parse(listed.body).connections.length, 1)
+
+    const signedUp = await request("auth/signup", {
+      method: "POST",
+      body: {
+        connectionId: connection.id,
+        username: "ada",
+        name: "Ada Lovelace",
+        password: "password1",
+        inviteCode: "0000-0000",
+      },
+    })
+    assert.equal(signedUp.status, 200)
+    const account = JSON.parse(signedUp.body).user
+    assert.equal(account.role, "superadmin")
+    assert.equal(account.limited, 0)
+    currentSession = sessionCookie(signedUp)
 
     const setup = await request("databases/query", {
       method: "POST",
@@ -281,12 +313,8 @@ INSERT INTO orders (id, customer_id, total) VALUES (10, 1, 5), (11, 2, 9);`,
       method: "POST",
       body: {
         connectionId: connection.id,
-        sql: `CREATE TABLE grone_note (
-          id TEXT PRIMARY KEY,
-          title TEXT NOT NULL,
-          updated_at TEXT NOT NULL
-        );
-        INSERT INTO grone_note (id, title, updated_at) VALUES ('legacy', 'Legacy', '2020-01-01T00:00:00.000Z')`,
+        sql: `INSERT INTO grone_note (id, title, updated_at, owner_id, created_at)
+          VALUES ('legacy', 'Legacy', '2020-01-01T00:00:00.000Z', '${account.id}', '2020-01-01T00:00:00.000Z')`,
       },
     })
     assert.equal(legacy.status, 200)
@@ -450,10 +478,380 @@ INSERT INTO orders (id, customer_id, total) VALUES (10, 1, 5), (11, 2, 9);`,
     const orders = JSON.parse(afterDrop.body).tables.find((table) => table.name === "orders")
     assert.equal(orders.columns.some((column) => column.name === "paid"), false)
   } finally {
+    currentSession = ""
     delete process.env.GRONE_DATA_DIR
     await fs.rm(dataDir, { recursive: true, force: true })
   }
 })
+
+test("accounts require invites and enforce note access", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "grone-accounts-"))
+  process.env.GRONE_DATA_DIR = dataDir
+  currentSession = ""
+  try {
+    const created = await request("databases/create", {
+      method: "POST",
+      body: { kind: "local", name: "Accounts" },
+    })
+    assert.equal(created.status, 200)
+    const connectionId = JSON.parse(created.body).connection.id
+
+    const locked = await request("notes/list", { method: "POST", body: { connectionId } })
+    assert.equal(locked.status, 401)
+    const hiddenQuery = await request("databases/query", {
+      method: "POST",
+      body: { connectionId, sql: "SELECT 1" },
+    })
+    assert.equal(hiddenQuery.status, 401)
+
+    const rejected = await request("auth/signup", {
+      method: "POST",
+      body: {
+        connectionId,
+        username: "ada",
+        name: "Ada",
+        password: "password1",
+        inviteCode: "1234-5678",
+      },
+    })
+    assert.equal(rejected.status, 400)
+
+    const first = await request("auth/signup", {
+      method: "POST",
+      body: {
+        connectionId,
+        username: "ada",
+        name: "Ada Lovelace",
+        password: "password1",
+        inviteCode: "0000-0000",
+      },
+    })
+    assert.equal(first.status, 200)
+    const admin = JSON.parse(first.body).user
+    assert.equal(admin.role, "superadmin")
+    currentSession = sessionCookie(first)
+
+    const again = await request("auth/signup", {
+      method: "POST",
+      body: {
+        connectionId,
+        username: "grace",
+        name: "Grace",
+        password: "password1",
+        inviteCode: "0000-0000",
+      },
+    })
+    assert.equal(again.status, 400)
+
+    const shortPassword = await request("auth/signup", {
+      method: "POST",
+      body: {
+        connectionId,
+        username: "grace",
+        name: "Grace",
+        password: "short",
+        inviteCode: "1111-2222",
+      },
+    })
+    assert.equal(shortPassword.status, 400)
+
+    const inviteList = await request("auth/invites", {
+      method: "POST",
+      body: { connectionId },
+    })
+    assert.equal(inviteList.status, 200)
+    const adminInvites = JSON.parse(inviteList.body)
+    assert.equal(adminInvites.open, 100)
+    assert.equal(adminInvites.canRefill, false)
+    const earlyRefill = await request("auth/invites/refill", {
+      method: "POST",
+      body: { connectionId },
+    })
+    assert.equal(earlyRefill.status, 400)
+
+    const childCode = adminInvites.invites.find((item) => item.status === "open").code
+    const second = await request("auth/signup", {
+      method: "POST",
+      body: {
+        connectionId,
+        username: "grace",
+        name: "Grace Hopper",
+        password: "password2",
+        inviteCode: childCode,
+      },
+    })
+    assert.equal(second.status, 200)
+    const member = JSON.parse(second.body).user
+    assert.equal(member.role, "member")
+    const memberCookie = sessionCookie(second)
+
+    const usedAgain = await request("auth/signup", {
+      method: "POST",
+      body: {
+        connectionId,
+        username: "edsger",
+        name: "Edsger",
+        password: "password3",
+        inviteCode: childCode,
+      },
+    })
+    assert.equal(usedAgain.status, 400)
+
+    const memberInvites = await request("auth/invites", {
+      method: "POST",
+      headers: { cookie: memberCookie },
+      body: { connectionId },
+    })
+    const grandchildCode = JSON.parse(memberInvites.body).invites.find((item) => item.status === "open").code
+    const third = await request("auth/signup", {
+      method: "POST",
+      body: {
+        connectionId,
+        username: "edsger",
+        name: "Edsger Dijkstra",
+        password: "password3",
+        inviteCode: grandchildCode,
+      },
+    })
+    assert.equal(third.status, 200)
+    const guest = JSON.parse(third.body).user
+    const guestCookie = sessionCookie(third)
+
+    const wrong = await request("auth/login", {
+      method: "POST",
+      body: { connectionId, username: "grace", password: "nope" },
+    })
+    assert.equal(wrong.status, 401)
+    const loggedIn = await request("auth/login", {
+      method: "POST",
+      body: { connectionId, username: "Grace", password: "password2" },
+    })
+    assert.equal(loggedIn.status, 200)
+    assert.equal(JSON.parse(loggedIn.body).user.username, "grace")
+
+    const renamed = await request("auth/profile", {
+      method: "POST",
+      body: { connectionId, name: "Ada L." },
+    })
+    assert.equal(renamed.status, 200)
+    assert.equal(JSON.parse(renamed.body).user.name, "Ada L.")
+    assert.equal(JSON.parse(renamed.body).user.username, "ada")
+
+    const began = await request("auth/totp/begin", {
+      method: "POST",
+      headers: { cookie: memberCookie },
+      body: { connectionId },
+    })
+    assert.equal(began.status, 200)
+    const enrollment = JSON.parse(began.body)
+    const confirmed = await request("auth/totp/confirm", {
+      method: "POST",
+      headers: { cookie: memberCookie },
+      body: { connectionId, challengeId: enrollment.challengeId, code: totpNow(enrollment.secret) },
+    })
+    assert.equal(confirmed.status, 200)
+    const factors = JSON.parse(confirmed.body).factors
+    assert.equal(factors.length, 1)
+    assert.equal(factors[0].kind, "totp")
+
+    const loggedOut = await request("auth/logout", {
+      method: "POST",
+      headers: { cookie: memberCookie },
+      body: { connectionId },
+    })
+    assert.equal(loggedOut.status, 200)
+    const passwordOnly = await request("auth/login", {
+      method: "POST",
+      body: { connectionId, username: "grace", password: "password2" },
+    })
+    assert.equal(passwordOnly.status, 200)
+    const challenge = JSON.parse(passwordOnly.body)
+    assert.equal(challenge.step, "2fa")
+    assert.ok(challenge.methods.includes("totp"))
+    const upcoming = totpNow(enrollment.secret, Date.now() + 30000)
+    const incorrect = upcoming === "000000" ? "000001" : "000000"
+    const badCode = await request("auth/totp/login", {
+      method: "POST",
+      body: { connectionId, challengeId: challenge.challengeId, code: incorrect },
+    })
+    assert.equal(badCode.status, 401)
+    const finished = await request("auth/totp/login", {
+      method: "POST",
+      body: { connectionId, challengeId: challenge.challengeId, code: upcoming },
+    })
+    assert.equal(finished.status, 200)
+    const graceSession = sessionCookie(finished)
+
+    const passkey = await request("auth/webauthn/register/options", {
+      method: "POST",
+      body: { connectionId, kind: "passkey" },
+    })
+    assert.equal(passkey.status, 200)
+    const passkeyOptions = JSON.parse(passkey.body).options
+    assert.equal(passkeyOptions.rp.id, "localhost")
+    assert.equal(passkeyOptions.authenticatorSelection.authenticatorAttachment, "platform")
+    assert.equal(passkeyOptions.authenticatorSelection.residentKey, "required")
+    const securityKey = await request("auth/webauthn/register/options", {
+      method: "POST",
+      headers: { cookie: graceSession },
+      body: { connectionId, kind: "security-key" },
+    })
+    assert.equal(securityKey.status, 200)
+    const keyOptions = JSON.parse(securityKey.body).options
+    assert.equal(keyOptions.authenticatorSelection.authenticatorAttachment, "cross-platform")
+
+    const removedFactor = await request("auth/factor/remove", {
+      method: "POST",
+      headers: { cookie: graceSession },
+      body: { connectionId, id: factors[0].id, kind: "totp" },
+    })
+    assert.equal(removedFactor.status, 200)
+    assert.equal(JSON.parse(removedFactor.body).factors.length, 0)
+
+    const early = await saveAuthNote(connectionId, graceSession, "note-early", "Early")
+    assert.equal(early.status, 200)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    const later = await saveAuthNote(connectionId, graceSession, "note-later", "Later")
+    assert.equal(later.status, 200)
+    const shared = await saveAuthNote(connectionId, guestCookie, "note-shared", "Shared")
+    assert.equal(shared.status, 200)
+
+    const forbidden = await request("auth/users/limit", {
+      method: "POST",
+      headers: { cookie: graceSession },
+      body: { connectionId, userId: member.id, limited: 1 },
+    })
+    assert.equal(forbidden.status, 403)
+    const limited = await request("auth/users/limit", {
+      method: "POST",
+      body: { connectionId, userId: member.id, limited: 1 },
+    })
+    assert.equal(limited.status, 200)
+
+    const limitedList = await request("notes/list", {
+      method: "POST",
+      headers: { cookie: graceSession },
+      body: { connectionId },
+    })
+    const visible = JSON.parse(limitedList.body).notes
+    assert.deepEqual(visible.map((note) => note.id), ["note-early"])
+    const hidden = await request("notes/get", {
+      method: "POST",
+      headers: { cookie: graceSession },
+      body: { connectionId, id: "note-later" },
+    })
+    assert.equal(hidden.status, 404)
+    const secondNote = await saveAuthNote(connectionId, graceSession, "note-third", "Third")
+    assert.equal(secondNote.status, 400)
+
+    const invited = await request("notes/share", {
+      method: "POST",
+      headers: { cookie: guestCookie },
+      body: { connectionId, id: "note-shared", username: "grace" },
+    })
+    assert.equal(invited.status, 200)
+    assert.equal(JSON.parse(invited.body).note.collaborators[0].username, "grace")
+    const withShare = await request("notes/list", {
+      method: "POST",
+      headers: { cookie: graceSession },
+      body: { connectionId },
+    })
+    const ids = JSON.parse(withShare.body).notes.map((note) => note.id).sort()
+    assert.deepEqual(ids, ["note-early", "note-shared"])
+
+    const edited = await request("notes/save", {
+      method: "POST",
+      headers: { cookie: graceSession },
+      body: {
+        connectionId,
+        note: { id: "note-shared", title: "Shared edit", blocks: [] },
+      },
+    })
+    assert.equal(edited.status, 200)
+    assert.equal(JSON.parse(edited.body).note.title, "Shared edit")
+    const deniedDelete = await request("notes/delete", {
+      method: "POST",
+      headers: { cookie: graceSession },
+      body: { connectionId, id: "note-shared" },
+    })
+    assert.equal(deniedDelete.status, 403)
+    const unshared = await request("notes/unshare", {
+      method: "POST",
+      headers: { cookie: guestCookie },
+      body: { connectionId, id: "note-shared", userId: member.id },
+    })
+    assert.equal(unshared.status, 200)
+    const gone = await request("notes/get", {
+      method: "POST",
+      headers: { cookie: graceSession },
+      body: { connectionId, id: "note-shared" },
+    })
+    assert.equal(gone.status, 404)
+
+    const restored = await request("auth/users/limit", {
+      method: "POST",
+      body: { connectionId, userId: member.id, limited: 0 },
+    })
+    assert.equal(restored.status, 200)
+    const unlimited = await request("notes/list", {
+      method: "POST",
+      headers: { cookie: graceSession },
+      body: { connectionId },
+    })
+    assert.deepEqual(
+      JSON.parse(unlimited.body).notes.map((note) => note.id).sort(),
+      ["note-early", "note-later"],
+    )
+
+    const marked = await request("auth/invites/send", {
+      method: "POST",
+      body: { connectionId, code: adminInvites.invites[0].code === childCode
+        ? adminInvites.invites[1].code
+        : adminInvites.invites[0].code },
+    })
+    assert.equal(marked.status, 200)
+    for (const invite of adminInvites.invites) {
+      if (invite.code === childCode || invite.status !== "open") {
+        continue
+      }
+      const sent = await request("auth/invites/send", {
+        method: "POST",
+        body: { connectionId, code: invite.code },
+      })
+      assert.equal(sent.status, 200)
+    }
+    const refilled = await request("auth/invites/refill", {
+      method: "POST",
+      body: { connectionId },
+    })
+    assert.equal(refilled.status, 200)
+    assert.equal(JSON.parse(refilled.body).open, 100)
+    const blocked = await request("auth/invites/refill", {
+      method: "POST",
+      body: { connectionId },
+    })
+    assert.equal(blocked.status, 400)
+  } finally {
+    currentSession = ""
+    delete process.env.GRONE_DATA_DIR
+    await fs.rm(dataDir, { recursive: true, force: true })
+  }
+})
+
+function saveAuthNote(connectionId, cookie, id, title) {
+  return request("notes/save", {
+    method: "POST",
+    headers: { cookie },
+    body: {
+      connectionId,
+      note: {
+        id,
+        title,
+        blocks: [{ id: `${id}-block`, kind: "markdown", name: "", body: title }],
+      },
+    },
+  })
+}
 
 test("vercel catch-all reads the path from query segments", async () => {
   const { default: handler } = await import("../api/[...path].js")

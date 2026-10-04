@@ -1,6 +1,5 @@
 get request
-at body
-to body
+to request
 get db
 at notesGet
-call [ get body ]
+call [ get request ]

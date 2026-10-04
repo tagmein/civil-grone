@@ -73,26 +73,34 @@ function [
  at row
  call
  to bar
- get ui
- at button
- call 'New note' [ function [
-  get newNote
-  call
- ] ]
- to newButton
- get ui
- at append
- call [ get bar ] [ get newButton ]
- get ui
- at button
- call Pipeline [ function [
-  get chooseTemplate
-  call
- ] ]
- to pipelineButton
- get ui
- at append
- call [ get bar ] [ get pipelineButton ]
+ get starry
+ at canCreateNote
+ call [ get state, at user ] [ get state, at notes ]
+ to canCreate
+ get canCreate
+ is true
+ true [
+  get ui
+  at button
+  call 'New note' [ function [
+   get newNote
+   call
+  ] ]
+  to newButton
+  get ui
+  at append
+  call [ get bar ] [ get newButton ]
+  get ui
+  at button
+  call Pipeline [ function [
+   get chooseTemplate
+   call
+  ] ]
+  to pipelineButton
+  get ui
+  at append
+  call [ get bar ] [ get pipelineButton ]
+ ]
  get state
  at archiveFilter
  is show
@@ -559,52 +567,99 @@ function [
    call 0
   ] ]
   to runAll
-  get ui
-  at append
-  call [ get titleRow ] [ get runAll ]
- get state
- at note
- at archived
- is 1
- to noteArchived
- pick [
- get noteArchived
- value Unarchive
- to archiveLabel
- ] [
- true
- value Archive
- to archiveLabel
- ]
+ get ui
+ at append
+ call [ get titleRow ] [ get runAll ]
  get ui
  at button
  call '⋯'
  to noteMenuButton
- get ui
- at menu
- call [ get noteMenuButton ] [ list [ object [
-  label [ get archiveLabel ]
-  action [ function [
-   get toggleArchive
+ get starry
+ at noteMenu
+ call [ get state, at note ] [ function [
+  get toggleArchive
+  call
+ ] ] [ function [
+  get confirmAction
+  call 'Delete note' 'Delete this note? This cannot be undone.' Delete [ function [
+   get deleteNote
    call
   ] ]
- ] ] [ object [
-  label Delete
-  action [ function [
-   get confirmAction
-   call 'Delete note' 'Delete this note? This cannot be undone.' Delete [ function [
-    get deleteNote
-    call
-   ] ]
-  ] ]
- ] ] ]
+ ] ] [ function [
+  get inviteCollaborator
+  call
+ ] ]
+ to noteItems
+ get ui
+ at menu
+ call [ get noteMenuButton ] [ get noteItems ]
  get ui
  at append
  call [ get titleRow ] [ get noteMenuButton ]
-  get ui
-  at append
-  call [ get state, at notePane ] [ get titleRow ]
+ get ui
+ at append
+ call [ get state, at notePane ] [ get titleRow ]
+ get state
+ at note
+ at owned
+ is 1
+ false [
   get state
+  at note
+  at owner
+  is null
+  false [
+   get ui
+   at text
+   call [ template 'Shared by %0' [ get state, at note, at owner, at username ] ]
+   to sharedBy
+   get ui
+   at append
+   call [ get state, at notePane ] [ get sharedBy ]
+  ]
+ ]
+ get state
+ at note
+ at collaborators
+ is undefined
+ false [
+  get state
+  at note
+  at collaborators
+  each [ function person [
+   get ui
+   at row
+   call
+   to line
+   get ui
+   at text
+   call [ template 'Collaborator %0' [ get person, at username ] ]
+   to personText
+   get ui
+   at append
+   call [ get line ] [ get personText ]
+   get state
+   at note
+   at owned
+   is 1
+   true [
+    get ui
+    at button
+    call Remove [ function [
+     get removeCollaborator
+     call [ get person ]
+    ] ]
+    to removeButton
+    get ui
+    at append
+    call [ get line ] [ get removeButton ]
+   ]
+   get ui
+   at append
+   call [ get state, at notePane ] [ get line ]
+  ] ]
+ ]
+ get state
   at note
   at blocks
   each [ function block index [
@@ -1888,6 +1943,85 @@ function block [
  ]
 ]
 to clearStepError
+
+function [
+ set state inviteUsername ''
+ get ui
+ at dialog
+ call 'Invite collaborator'
+ to dialog
+ get ui
+ at field
+ call Username [ get state, at inviteUsername ] [ function value [
+  set state inviteUsername [ get value ]
+ ] ]
+ to usernameField
+ get ui
+ at append
+ call [ get dialog, at panel ] [ get usernameField ]
+ get ui
+ at button
+ call Invite [ function [
+  try [
+   get starry
+   at api
+   call 'notes/share' [ object [
+    connectionId [ get state, at connectionId ]
+    id [ get state, at note, at id ]
+    username [ get state, at inviteUsername ]
+   ] ]
+   at note
+   to saved
+   set state note [ get saved ]
+   get dialog
+   at close
+   call
+   get paintNote
+   call
+   get shell
+   at setStatus
+   call 'Collaborator invited.' info
+  ] [
+   get_error
+   to message
+   get shell
+   at setStatus
+   call [ get message ] error
+  ]
+ ] ]
+ to inviteButton
+ get ui
+ at append
+ call [ get dialog, at panel ] [ get inviteButton ]
+ get dialog
+ at open
+ call
+]
+to inviteCollaborator
+
+function person [
+ try [
+  get starry
+  at api
+  call 'notes/unshare' [ object [
+   connectionId [ get state, at connectionId ]
+   id [ get state, at note, at id ]
+   userId [ get person, at id ]
+  ] ]
+  at note
+  to saved
+  set state note [ get saved ]
+  get paintNote
+  call
+ ] [
+  get_error
+  to message
+  get shell
+  at setStatus
+  call [ get message ] error
+ ]
+]
+to removeCollaborator
 
 function [
  get starry

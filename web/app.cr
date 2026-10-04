@@ -40,6 +40,25 @@ set state [ object [
  draftToken ''
  columnName ''
  columnType TEXT
+ user null
+ hasUsers false
+ authMode signin
+ authUsername ''
+ authName ''
+ authPassword ''
+ authInvite ''
+ authChallenge ''
+ authMethods [ list ]
+ authCode ''
+ profile null
+ profileDialog null
+ profileEditing 0
+ profileName ''
+ totpChallenge ''
+ totpSecret ''
+ totpUri ''
+ totpCode ''
+ inviteUsername ''
 ] ]
 
 get starry
@@ -61,6 +80,10 @@ to databases
 load ./notes.cr
 point
 to notes
+
+load ./account.cr
+point
+to account
 
 function [
  get ui
@@ -312,9 +335,69 @@ function [
  get ui
  at append
  call [ get shell, at tray ] [ get themeButton ]
+ get state
+ at user
+ is null
+ false [
+  get ui
+  at button
+  call [ get state, at user, at username ]
+  to accountButton
+  get ui
+  at menu
+  call [ get accountButton ] [ list [ object [
+   label 'View profile'
+   action [ function [
+    get account
+    at openProfile
+    call
+   ] ]
+  ] ] [ object [
+   label 'Sign out'
+   action [ function [
+    get account
+    at signOut
+    call
+   ] ]
+  ] ] ]
+  get ui
+  at append
+  call [ get shell, at tray ] [ get accountButton ]
+ ]
  get starry
  at clearScreen
  call [ get shell, at main ]
+ get state
+ at connectionId
+ is ''
+ to noDatabase
+ get state
+ at user
+ is null
+ to signedOut
+ get noDatabase
+ is true
+ false [
+  get signedOut
+  is true
+  true [
+   get account
+   at renderGate
+   call
+  ]
+  false [
+   get renderSection
+   call
+  ]
+ ]
+ true [
+  get renderSection
+  call
+ ]
+]
+to render
+
+function [
  get state
  at section
  is home
@@ -347,7 +430,46 @@ function [
   ]
  ]
 ]
-to render
+to renderSection
+
+function [
+ get render
+ call
+]
+to refresh
+
+function [
+ get state
+ at connectionId
+ is ''
+ true [
+  set state user null
+  set state hasUsers false
+ ]
+ false [
+  get starry
+  at api
+  call 'auth/session' [ object [
+   connectionId [ get state, at connectionId ]
+  ] ]
+  to session
+  set state user [ get session, at user ]
+  set state hasUsers [ get session, at hasUsers ]
+  get session
+  at hasUsers
+  is false
+  true [
+   get state
+   at authInvite
+   is ''
+   true [
+    set state authInvite '0000-0000'
+   ]
+   set state authMode signup
+  ]
+ ]
+]
+to loadSession
 
 function [
  get starry
@@ -456,6 +578,8 @@ function id [
  set state dbView data
  get useConnection
  call [ get id ]
+ get loadSession
+ call
  get render
  call
 ]
@@ -505,6 +629,7 @@ function [
    true [
     set state connectionId ''
     set state connectionName 'No database'
+    set state user null
     set state selectedTable ''
     set state tables [ list ]
     set state note null
@@ -678,6 +803,8 @@ try [
   get useConnection
   call [ get storedId ]
  ]
+ get loadSession
+ call
  get starry
  at readRoute
  call
