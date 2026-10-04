@@ -12,12 +12,19 @@ const pages = {
   "/index.html": "index.html",
   "/starry.mjs": "starry.mjs",
   "/favicon.ico": "favicon.ico",
+  "/icon-192.png": "icon-192.png",
+  "/icon-512.png": "icon-512.png",
+  "/manifest.webmanifest": "manifest.webmanifest",
+  "/sw.js": "sw.js",
 }
 
 const types = {
   ".html": "text/html; charset=utf-8",
   ".ico": "image/x-icon",
+  ".js": "text/javascript; charset=utf-8",
   ".mjs": "text/javascript; charset=utf-8",
+  ".png": "image/png",
+  ".webmanifest": "application/manifest+json",
   ".cr": "text/plain; charset=utf-8",
 }
 
@@ -37,6 +44,10 @@ async function crownModule(production) {
 
 function isNotesRoute(pathname) {
   return pathname === "/notes" || pathname === "/notes/" || /^\/notes\/[^/]+\/?$/.test(pathname)
+}
+
+function isExamplesRoute(pathname) {
+  return pathname === "/examples" || pathname === "/examples/" || /^\/examples\/[^/]+\/?$/.test(pathname)
 }
 
 function readBody(req) {
@@ -116,13 +127,13 @@ async function handleRequest(req, res, production) {
     res.end(body)
     return
   }
-  if (req.method === "GET" && (url.pathname in pages || isNotesRoute(url.pathname))) {
+  if (req.method === "GET" && (url.pathname in pages || isNotesRoute(url.pathname) || isExamplesRoute(url.pathname))) {
     const filename = pages[url.pathname] || "index.html"
     const body = await fs.readFile(path.join(webDir, filename))
     const headers = {
       "content-type": types[path.extname(filename)] || "application/octet-stream",
     }
-    if (!production) {
+    if (!production || url.pathname === "/sw.js" || url.pathname === "/manifest.webmanifest") {
       headers["cache-control"] = "no-cache"
     }
     res.writeHead(200, headers)

@@ -1,6 +1,9 @@
 import {
  applySelect,
+ canonicalColumnType,
  conflictView,
+ datasetColumnTypes,
+ integerBase,
  readBaseline,
  readPinned,
  selectColumnChecked,
@@ -11,7 +14,9 @@ import {
  stampBaseline,
  writeSelectColumn,
  writeSelectFilter,
+ type ColumnDraft,
 } from "./dataset.ts"
+export { applyDatasetColumns } from "./dataset.ts"
 import {
  columnSummary,
  summaryOptions,
@@ -810,13 +815,18 @@ function normalizePath(pathname: string) {
 
 export function readRoute() {
  if (typeof location === "undefined") {
-  return { section: "", noteId: "" }
+  return { section: "", noteId: "", example: "" }
  }
- const match = normalizePath(location.pathname).match(/^\/notes(?:\/([^/]+))?$/)
- if (!match) {
-  return { section: "", noteId: "" }
+ const path = normalizePath(location.pathname)
+ const notes = path.match(/^\/notes(?:\/([^/]+))?$/)
+ if (notes) {
+  return { section: "notes", noteId: notes[1] ?? "", example: "" }
  }
- return { section: "notes", noteId: match[1] ?? "" }
+ const examples = path.match(/^\/examples(?:\/([^/]+))?$/)
+ if (examples) {
+  return { section: "examples", noteId: "", example: examples[1] ?? "" }
+ }
+ return { section: "", noteId: "", example: "" }
 }
 
 export function writeRoute(section: string, noteId: string, example: string, mode: string) {
@@ -826,7 +836,11 @@ export function writeRoute(section: string, noteId: string, example: string, mod
  const safeSection = section || "databases"
  const id = safeSection === "notes" ? String(noteId ?? "") : ""
  const demo = safeSection === "examples" ? String(example ?? "") : ""
- const next = safeSection === "notes" ? (id ? `/notes/${encodeURIComponent(id)}` : "/notes") : "/"
+ const next = safeSection === "notes"
+  ? (id ? `/notes/${encodeURIComponent(id)}` : "/notes")
+  : safeSection === "examples"
+   ? (demo ? `/examples/${encodeURIComponent(demo)}` : "/examples")
+   : "/"
  const data = { section: safeSection, noteId: id, example: demo }
  const samePath = normalizePath(location.pathname) === normalizePath(next)
  const prev = history.state && typeof history.state === "object"
@@ -856,7 +870,11 @@ export function onRoute(handler: unknown) {
    void guard(handler)("notes", route.noteId, "")
    return
   }
-  void guard(handler)(String(stored.section || "databases"), "", String(stored.example || ""))
+  if (route.section === "examples") {
+   void guard(handler)("examples", "", route.example)
+   return
+  }
+  void guard(handler)(String(stored.section || "databases"), "", "")
  })
 }
 
@@ -1218,23 +1236,6 @@ export function editDatasetCell(
  return dataset
 }
 
-type DatasetColumn = { name?: string; type?: string; width?: number }
-
-type ColumnDraft = {
- name: string
- type: string
- from: number
-}
-
-type DatasetSchema = {
- columns?: DatasetColumn[]
- rows?: unknown[][]
- sort?: { column: string }[]
- filters?: { column: string }[]
- baseline?: (unknown[] | null)[]
- pinned?: string[][]
-}
-
 function columnDraftError(drafts: ColumnDraft[], inserting: boolean) {
  if (inserting && drafts.length === 0) {
   return "Add a column before adding a row."
@@ -1265,89 +1266,50 @@ function pushColumnDraft(drafts: ColumnDraft[]) {
  return drafts
 }
 
-function remapColumnKey<T extends { column: string }>(items: T[] | undefined, rename: Map<string, string>) {
- const next: T[] = []
- for (const item of items ?? []) {
-  const name = rename.get(item.column)
-  if (!name) {
-   continue
-  }
-  next.push({ ...item, column: name })
- }
- return next
-}
-
-export function applyDatasetColumns(dataset: DatasetSchema, drafts: ColumnDraft[]) {
- const previous = dataset?.columns ?? []
- const rename = new Map<string, string>()
- dataset.columns = (drafts ?? []).map((draft) => {
-  const name = String(draft?.name ?? "").trim()
-  const type = String(draft?.type ?? "").trim()
-  const from = typeof draft?.from === "number" ? draft.from : -1
-  const prior = from >= 0 ? previous[from] : undefined
-  if (prior?.name) {
-   rename.set(String(prior.name), name)
-  }
-  const column: DatasetColumn = prior ? { ...prior, name } : { name }
-  if (type) {
-   column.type = type
-  } else {
-   delete column.type
-  }
-  return column
- })
- dataset.rows = (dataset.rows ?? []).map((row) => {
-  const source = Array.isArray(row) ? row : []
-  return (drafts ?? []).map((draft) => {
-   const from = typeof draft?.from === "number" ? draft.from : -1
-   return from >= 0 ? source[from] ?? "" : ""
-  })
- })
- dataset.sort = remapColumnKey(dataset.sort, rename)
- dataset.filters = remapColumnKey(dataset.filters, rename)
- if (Array.isArray(dataset.baseline)) {
-  dataset.baseline = dataset.baseline.map((row) => {
-   if (!Array.isArray(row)) {
-    return null
-   }
-   return (drafts ?? []).map((draft) => {
-    const from = typeof draft?.from === "number" ? draft.from : -1
-    return from >= 0 ? row[from] ?? "" : ""
-   })
-  })
- }
- if (Array.isArray(dataset.pinned)) {
-  dataset.pinned = dataset.pinned.map((names) => {
-   if (!Array.isArray(names)) {
-    return []
-   }
-   const next: string[] = []
-   for (const name of names) {
-    const renamed = rename.get(String(name))
-    if (renamed) {
-     next.push(renamed)
-    }
-   }
-   return next
-  })
- }
- return dataset
-}
-
 type SchemaUi = {
  dialog(title: string): { panel: HTMLElement; open(): void; close(): void }
  column(): HTMLElement
  row(): HTMLElement
  field(label: string, value: string, onInput?: unknown): HTMLElement
+ choice(value: string, options: { value?: string; label?: string }[], onChange?: unknown): HTMLElement
  button(label: string, onClick?: unknown): HTMLElement
  notice(tone: string, text: string): HTMLElement
+ text(value: string): HTMLElement
  append(parent: HTMLElement, child: HTMLElement): unknown
  clear(parent: HTMLElement): void
 }
 
+function originalColumnType(dataset: { columns?: { type?: string }[] }, draft: ColumnDraft) {
+ if (draft.from < 0) {
+  return ""
+ }
+ return String(dataset.columns?.[draft.from]?.type ?? "")
+}
+
+function columnTypeChanged(dataset: { columns?: { type?: string }[] }, draft: ColumnDraft) {
+ if (draft.from < 0) {
+  return false
+ }
+ return canonicalColumnType(originalColumnType(dataset, draft)) !== canonicalColumnType(draft.type)
+}
+
+function typeOptions(type: string) {
+ const options = datasetColumnTypes.map((name) => ({ value: name, label: name }))
+ const canonical = canonicalColumnType(type)
+ if (canonical && !datasetColumnTypes.includes(canonical)) {
+  options.unshift({ value: type, label: type })
+ }
+ return options
+}
+
+function shownColumnType(type: string) {
+ const canonical = canonicalColumnType(type)
+ return datasetColumnTypes.includes(canonical) ? canonical : type
+}
+
 export function openDatasetColumns(
  ui: SchemaUi,
- dataset: DatasetSchema,
+ dataset: { columns?: { name?: string; type?: string }[] },
  addRow: unknown,
  onSave: unknown,
  onError: unknown,
@@ -1361,6 +1323,7 @@ export function openDatasetColumns(
  if (inserting && drafts.length === 0) {
   pushColumnDraft(drafts)
  }
+ let migrationOffered = false
  const editor = ui.dialog("Columns")
  const list = ui.column()
  list.style.flexGrow = "0"
@@ -1375,10 +1338,62 @@ export function openDatasetColumns(
   pushColumnDraft(drafts)
   paint()
  }))
- ui.append(actions, ui.button("Save", () => {
-  void commit()
+ ui.append(actions, ui.button("Save changes", () => {
+  void commit(false)
  }))
  ui.append(editor.panel, actions)
+ const offer = ui.column()
+ offer.style.flexGrow = "0"
+ offer.style.gap = "var(--dimension2)"
+ offer.hidden = true
+ offer.setAttribute("data-column-migration", "1")
+ ui.append(editor.panel, offer)
+ function changedDrafts() {
+  return drafts.filter((draft) => columnTypeChanged(dataset, draft))
+ }
+ function paintMigration() {
+  ui.clear(offer)
+  const changed = changedDrafts()
+  if (!migrationOffered || changed.length === 0) {
+   offer.hidden = true
+   if (changed.length === 0) {
+    migrationOffered = false
+   }
+   return
+  }
+  offer.hidden = false
+  ui.append(offer, ui.notice(
+   "info",
+   "Column types changed. Migrate rewrites existing values. Integer text is parsed in the base you set, and 10 is decimal. Save changes again to keep the current values.",
+  ))
+  for (const draft of changed) {
+   const line = ui.row()
+   line.style.flexGrow = "0"
+   line.style.flexWrap = "wrap"
+   line.style.padding = "0"
+   const prior = canonicalColumnType(originalColumnType(dataset, draft)) || "TEXT"
+   const next = canonicalColumnType(draft.type) || draft.type
+   ui.append(line, ui.text(`${draft.name.trim() || "Column"}: ${prior} → ${next}`))
+   if (next === "INTEGER") {
+    if (!draft.base) {
+     draft.base = "10"
+    }
+    const base = ui.field("Base", String(draft.base), (value: string) => {
+     draft.base = value
+    })
+    base.style.flex = "0 1 6rem"
+    base.style.minWidth = "0"
+    base.setAttribute("data-integer-base", draft.name.trim())
+    ui.append(line, base)
+   }
+   ui.append(offer, line)
+  }
+  const migrate = ui.button("Migrate", () => {
+   void commit(true)
+  })
+  migrate.setAttribute("data-migrate", "1")
+  ui.append(offer, migrate)
+ }
  function paint() {
   ui.clear(list)
   if (drafts.length === 0) {
@@ -1395,31 +1410,52 @@ export function openDatasetColumns(
    name.style.flex = "1 1 8rem"
    name.style.minWidth = "0"
    name.style.width = "auto"
-   const type = ui.field("Type", draft.type, (value: string) => {
+   const type = ui.choice(shownColumnType(draft.type), typeOptions(draft.type), (value: string) => {
     draft.type = value
+    paintMigration()
    })
-   type.style.flex = "0 1 7rem"
-   type.style.minWidth = "0"
-   type.style.width = "auto"
+   type.setAttribute("aria-label", "Type")
+   type.setAttribute("data-column-type", String(index))
+   type.style.flex = "0 1 9rem"
    ui.append(line, name)
    ui.append(line, type)
    ui.append(line, ui.button("Remove", () => {
     drafts.splice(index, 1)
     paint()
+    paintMigration()
    }))
    ui.append(list, line)
   })
  }
- async function commit() {
+ async function commit(migrate: boolean) {
   const message = columnDraftError(drafts, inserting)
   if (message) {
    await guard(onError)(message)
    return
   }
+  const changed = changedDrafts()
+  if (changed.length > 0 && !migrate && !migrationOffered) {
+   migrationOffered = true
+   paintMigration()
+   return
+  }
+  if (migrate) {
+   for (const draft of changed) {
+    if (canonicalColumnType(draft.type) !== "INTEGER") {
+     continue
+    }
+    if (integerBase(draft.base) == null) {
+     await guard(onError)(`Base for ${draft.name.trim()} must be an integer from 2 to 36.`)
+     return
+    }
+   }
+  }
   const saved = drafts.map((draft) => ({
    name: draft.name.trim(),
    type: draft.type.trim(),
    from: draft.from,
+   migrate: migrate && columnTypeChanged(dataset, draft),
+   base: draft.base,
   }))
   editor.close()
   await guard(onSave)(saved)
@@ -1720,8 +1756,27 @@ export async function runUserJavaScript(source: string, bindings: Record<string,
  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as new (
   ...args: string[]
  ) => (...values: unknown[]) => Promise<unknown>
- const runner = new AsyncFunction("sql", "datasets", "previous", "inList", source)
- return runner(bindings.sql, bindings.datasets, bindings.previous, bindings.inList)
+ const runner = new AsyncFunction(
+  "sql",
+  "datasets",
+  "previous",
+  "inList",
+  "ui",
+  "writeDataset",
+  "refresh",
+  "starry",
+  source,
+ )
+ return runner(
+  bindings.sql,
+  bindings.datasets,
+  bindings.previous,
+  bindings.inList,
+  bindings.ui,
+  bindings.writeDataset,
+  bindings.refresh,
+  bindings.starry,
+ )
 }
 
 export function primaryKey(grid: { rows?: unknown[][]; columns?: { name: string }[]; primaryKey?: string[] }, rowIndex: number) {
@@ -1912,8 +1967,8 @@ export function renderExamples(
   importExample(title, blocks) {
    void guard(onImport)(title, blocks)
   },
-  run(source, datasets, writeDataset, refresh) {
-   return runUserCrown(source, {
+  run(source, datasets, writeDataset, refresh, kind) {
+   const bindings = {
     datasets,
     previous: null,
     inList,
@@ -1922,7 +1977,11 @@ export function renderExamples(
     starry: { asDataset, id, isElement, parseDataset, stringifyDataset, visibleRows },
     writeDataset,
     refresh,
-   })
+   }
+   if (kind === "javascript") {
+    return runUserJavaScript(source, bindings)
+   }
+   return runUserCrown(source, bindings)
   },
  })
 }

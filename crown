@@ -730,15 +730,17 @@ function crown(context = globalThis, names = new Map(), basePath = globalThis.ba
    for (const arg of argumentListRaw) {
     const val = uncrown(arg)
     if (Array.isArray(val)) {
-     for (const statement of val) {
-      if (Array.isArray(statement)) {
-       const scope = me.clone(undefined, currentBasePath ?? basePath)
-       await scope.walk([statement])
-       currentValue.push(scope.current())
-      } else {
-       currentValue.push(statement)
-      }
+     if (val.length === 0) {
+      continue
      }
+     const scope = me.clone(undefined, currentBasePath ?? basePath)
+     await scope.walk(val)
+     const nestedError = scope._check_error()
+     if (nestedError !== undefined) {
+      currentError = new Error(nestedError)
+      return me
+     }
+     currentValue.push(scope.current())
     } else {
      currentValue.push(val)
     }

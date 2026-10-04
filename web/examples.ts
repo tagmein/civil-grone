@@ -1,9 +1,10 @@
-// Preview edits live in localStorage. Import saves that Crown source and the current rows as a note.
+// Preview edits live in localStorage. Import saves the selected source and the current rows as a note.
 
 export interface ExamplesUi {
  append(parent: HTMLElement, child: HTMLElement): HTMLElement
  button(label: string, onClick?: unknown): HTMLElement
  check(checked: boolean, onChange?: unknown): HTMLElement
+ choice(value: string, options: { value?: string; label?: string }[], onChange?: unknown): HTMLSelectElement
  clear(parent: HTMLElement): void
  code(value: string, onInput?: unknown, onSubmit?: unknown): HTMLTextAreaElement
  column(): HTMLElement
@@ -55,6 +56,8 @@ interface ExampleSession {
  blocks: ExampleBlock[]
  crownName: string
  crownSource: string
+ scriptSource: string
+ language: "crown" | "javascript"
  datasets: Record<string, Dataset>
 }
 
@@ -65,11 +68,14 @@ export interface ExampleRuntime {
   datasets: Record<string, Dataset>,
   writeDataset: (name: string, data: Dataset) => void | Promise<void>,
   refresh: () => void | Promise<void>,
+  kind: string,
  ): Promise<unknown>
 }
 
 interface StoredExample {
  crowns?: Record<string, unknown>
+ scripts?: Record<string, unknown>
+ languages?: Record<string, unknown>
  datasets?: Record<string, unknown>
 }
 
@@ -1008,16 +1014,323 @@ call [ get page ] [ get grid ]
 get page
 `
 
+const todoScript = `const data = datasets.tasks
+let draft = ""
+const page = ui.column()
+page.style.gap = "var(--dimension3)"
+const entry = ui.row()
+const taskField = ui.input("", (value) => {
+ draft = String(value ?? "")
+})
+taskField.placeholder = "Add a task"
+taskField.style.width = "16rem"
+ui.append(entry, taskField)
+ui.append(entry, ui.button("Add", () => {
+ const title = draft.trim()
+ if (title === "") {
+  return
+ }
+ data.rows.push([title, "false"])
+ draft = ""
+ writeDataset("tasks", data)
+ refresh()
+}))
+ui.append(page, entry)
+if (data.rows.length === 0) {
+ ui.append(page, ui.notice("empty", "No tasks yet."))
+}
+data.rows.forEach((row, index) => {
+ const line = ui.row()
+ const done = row[1] === "true"
+ ui.append(line, ui.check(done, (value) => {
+  row[1] = value
+  writeDataset("tasks", data)
+  refresh()
+ }))
+ const label = ui.text(String(row[0] ?? ""))
+ if (done) {
+  label.style.textDecoration = "line-through"
+ }
+ ui.append(line, label)
+ ui.append(line, ui.button("Remove", () => {
+  data.rows.splice(index, 1)
+  writeDataset("tasks", data)
+  refresh()
+ }))
+ ui.append(page, line)
+})
+return page
+`
+
+const contactScript = `const data = datasets.contacts
+const selection = datasets.selection
+const selectionRow = selection.rows[0]
+const selectedId = selectionRow ? String(selectionRow[0] ?? "") : ""
+let selectedIndex = -1
+data.rows.forEach((row, index) => {
+ if (String(row[0]) === selectedId) {
+  selectedIndex = index
+ }
+})
+const existing = data.rows.find((row) => String(row[0]) === selectedId)
+const tableRows = data.rows.map((row) => [row[1], row[2], row[3]])
+function openContact(current) {
+ const draft = {
+  name: current ? String(current[1] ?? "") : "",
+  email: current ? String(current[2] ?? "") : "",
+  phone: current ? String(current[3] ?? "") : "",
+ }
+ const dialog = ui.dialog(current ? "Edit contact" : "New contact")
+ ui.append(dialog.panel, ui.field("Name", draft.name, (value) => {
+  draft.name = String(value ?? "")
+ }))
+ ui.append(dialog.panel, ui.field("Email", draft.email, (value) => {
+  draft.email = String(value ?? "")
+ }))
+ ui.append(dialog.panel, ui.field("Phone", draft.phone, (value) => {
+  draft.phone = String(value ?? "")
+ }))
+ const error = ui.notice("error", "Name is required.")
+ error.hidden = true
+ ui.append(dialog.panel, error)
+ ui.append(dialog.panel, ui.button("Save", () => {
+  const name = draft.name.trim()
+  const email = draft.email.trim()
+  const phone = draft.phone.trim()
+  if (name === "") {
+   error.hidden = false
+   return
+  }
+  if (!current) {
+   const created = starry.id()
+   data.rows.push([created, name, email, phone])
+   selectionRow[0] = created
+  } else {
+   current[1] = name
+   current[2] = email
+   current[3] = phone
+   selectionRow[0] = current[0]
+  }
+  dialog.close()
+  writeDataset("contacts", data)
+  writeDataset("selection", selection)
+  refresh()
+ }))
+ ui.append(dialog.panel, ui.button("Cancel", () => {
+  dialog.close()
+ }))
+ dialog.open()
+}
+const page = ui.column()
+page.style.gap = "var(--dimension3)"
+const bar = ui.row()
+ui.append(bar, ui.button("New contact", () => {
+ openContact(undefined)
+}))
+if (selectedId !== "") {
+ ui.append(bar, ui.button("Edit", () => {
+  openContact(existing)
+ }))
+ ui.append(bar, ui.button("Delete", () => {
+  data.rows = data.rows.filter((row) => String(row[0]) !== selectedId)
+  selectionRow[0] = ""
+  writeDataset("contacts", data)
+  writeDataset("selection", selection)
+  refresh()
+ }))
+}
+ui.append(page, bar)
+if (selectedId === "") {
+ ui.append(page, ui.notice("info", "Select a row to edit or delete it."))
+}
+ui.append(page, ui.table({
+ columns: [
+  { name: "name", type: "text" },
+  { name: "email", type: "text" },
+  { name: "phone", type: "text" },
+ ],
+ rows: tableRows,
+ selectedIndex,
+ onSelectRow(index) {
+  const id = data.rows[index][0]
+  if (selectedId !== String(id ?? "")) {
+   selectionRow[0] = id
+   writeDataset("selection", selection)
+   refresh()
+  }
+ },
+}))
+return page
+`
+
+const notesScript = `const data = datasets.notes
+const selection = datasets.selection
+const selectionRow = selection.rows[0]
+const selectedId = selectionRow ? String(selectionRow[0] ?? "") : ""
+const nodes = data.rows.map((row) => ({
+ id: row[0],
+ label: String(row[1] ?? "") === "" ? "Untitled" : String(row[1]),
+}))
+const selected = data.rows.find((row) => String(row[0]) === selectedId)
+const page = ui.column()
+page.style.gap = "var(--dimension3)"
+const bar = ui.row()
+ui.append(bar, ui.button("New note", () => {
+ const noteId = starry.id()
+ data.rows.push([noteId, "Untitled", ""])
+ selectionRow[0] = noteId
+ writeDataset("notes", data)
+ writeDataset("selection", selection)
+ refresh()
+}))
+if (selectedId !== "") {
+ ui.append(bar, ui.button("Delete note", () => {
+  const keep = data.rows.filter((row) => String(row[0]) !== selectedId)
+  data.rows = keep
+  selectionRow[0] = keep.length === 0 ? "" : keep[0][0]
+  writeDataset("notes", data)
+  writeDataset("selection", selection)
+  refresh()
+ }))
+}
+ui.append(page, bar)
+const panes = ui.split("row", 0.32)
+panes.element.style.flex = "1"
+panes.element.style.minHeight = "16rem"
+panes.end.style.display = "flex"
+panes.end.style.flexDirection = "column"
+panes.end.style.gap = "var(--dimension2)"
+ui.append(panes.start, ui.tree(nodes, selectedId, (id) => {
+ if (selectedId !== String(id ?? "")) {
+  selectionRow[0] = id
+  writeDataset("selection", selection)
+  refresh()
+ }
+}))
+if (!selected) {
+ ui.append(panes.end, ui.notice("empty", "No notes yet."))
+} else {
+ ui.append(panes.end, ui.field("Title", String(selected[1] ?? ""), (value) => {
+  selected[1] = value
+  writeDataset("notes", data)
+ }))
+ const bodyField = ui.code(String(selected[2] ?? ""), (value) => {
+  selected[2] = value
+  writeDataset("notes", data)
+ })
+ bodyField.style.flex = "1"
+ bodyField.style.minHeight = "12rem"
+ ui.append(panes.end, bodyField)
+}
+ui.append(page, panes.element)
+return page
+`
+
+const settingsScript = `const data = datasets.settings
+function findRow(key) {
+ return data.rows.find((row) => row[0] === key)
+}
+const nameRow = findRow("displayName")
+const emailRow = findRow("email")
+const densityRow = findRow("density")
+const tipsRow = findRow("tips")
+const page = ui.column()
+page.style.gap = "var(--dimension3)"
+const greeting = ui.heading("Hello, " + nameRow[1])
+ui.append(page, greeting)
+ui.append(page, ui.field("Display name", String(nameRow[1] ?? ""), (value) => {
+ nameRow[1] = value
+ greeting.textContent = "Hello, " + value
+ writeDataset("settings", data)
+}))
+ui.append(page, ui.field("Email", String(emailRow[1] ?? ""), (value) => {
+ emailRow[1] = value
+ writeDataset("settings", data)
+}))
+const densityLine = ui.row()
+ui.append(densityLine, ui.text("Density"))
+ui.append(densityLine, ui.button(densityRow[1] === "comfortable" ? "Comfortable · on" : "Comfortable", () => {
+ densityRow[1] = "comfortable"
+ writeDataset("settings", data)
+ refresh()
+}))
+ui.append(densityLine, ui.button(densityRow[1] === "compact" ? "Compact · on" : "Compact", () => {
+ densityRow[1] = "compact"
+ writeDataset("settings", data)
+ refresh()
+}))
+ui.append(page, densityLine)
+const tipsLine = ui.row()
+const tipsOn = tipsRow[1] === "true"
+ui.append(tipsLine, ui.check(tipsOn, (value) => {
+ tipsRow[1] = value
+ writeDataset("settings", data)
+ refresh()
+}))
+ui.append(tipsLine, ui.text("Show tips"))
+ui.append(page, tipsLine)
+if (tipsOn) {
+ ui.append(page, ui.notice("info", "Tip: Reset data puts the sample preferences back."))
+}
+ui.append(page, ui.notice("info", "Edits are written back to the settings dataset."))
+return page
+`
+
+const inventoryScript = `const data = datasets.stock
+const shown = starry.visibleRows(data)
+const page = ui.column()
+page.style.gap = "var(--dimension3)"
+const bar = ui.row()
+ui.append(bar, ui.button("Add row", () => {
+ data.rows.push(["New item", "", "0", ""])
+ writeDataset("stock", data)
+ refresh()
+}))
+ui.append(page, bar)
+ui.append(page, ui.notice("info", "Double-click a cell to edit it. Sort and filters stay on the stock dataset."))
+ui.append(page, ui.table({
+ columns: data.columns,
+ rows: shown,
+ sort: data.sort,
+ filters: data.filters,
+ editable: true,
+ onSort(sort) {
+  data.sort = sort
+  writeDataset("stock", data)
+  refresh()
+ },
+ onFilter(filters) {
+  data.filters = filters
+  writeDataset("stock", data)
+  refresh()
+ },
+ onCellEdit(rowIndex, columnName, value) {
+  const row = shown[rowIndex]
+  if (!row) {
+   return
+  }
+  const columnIndex = data.columns.findIndex((column) => column.name === columnName)
+  if (columnIndex < 0) {
+   return
+  }
+  row[columnIndex] = value
+  writeDataset("stock", data)
+  refresh()
+ },
+}))
+return page
+`
+
 const exampleCatalog: ExampleDef[] = [
  {
   id: "todos",
   title: "Todo list",
-  summary: "A tasks dataset and Crown that adds and checks rows.",
+  summary: "A tasks dataset and a block that adds and checks rows.",
   blocks: [
    {
     kind: "markdown",
     name: "",
-    body: "# Todo list\n\nThe tasks dataset holds the rows. Run the Crown block to add tasks and check them off.",
+    body: "# Todo list\n\nThe tasks dataset holds the rows. Run the block to add tasks and check them off.",
    },
    {
     kind: "dataset",
@@ -1032,12 +1345,13 @@ const exampleCatalog: ExampleDef[] = [
     ),
    },
    { kind: "crown", name: "view", body: todoCrown },
+   { kind: "javascript", name: "view", body: todoScript },
   ],
  },
  {
   id: "contacts",
   title: "Contacts",
-  summary: "A contacts dataset and Crown for the table and edit form.",
+  summary: "A contacts dataset and a block for the table and edit form.",
   blocks: [
    {
     kind: "markdown",
@@ -1062,12 +1376,13 @@ const exampleCatalog: ExampleDef[] = [
     body: datasetBody([column("id")], [[""]]),
    },
    { kind: "crown", name: "view", body: contactCrown },
+   { kind: "javascript", name: "view", body: contactScript },
   ],
  },
  {
   id: "notes",
   title: "Notes",
-  summary: "A notes dataset and Crown that picks a note and edits it.",
+  summary: "A notes dataset and a block that picks a note and edits it.",
   blocks: [
    {
     kind: "markdown",
@@ -1091,17 +1406,18 @@ const exampleCatalog: ExampleDef[] = [
     body: datasetBody([column("id")], [["n1"]]),
    },
    { kind: "crown", name: "view", body: notesCrown },
+   { kind: "javascript", name: "view", body: notesScript },
   ],
  },
  {
   id: "settings",
   title: "Settings",
-  summary: "Key and value rows with Crown that edits them.",
+  summary: "Key and value rows with a block that edits them.",
   blocks: [
    {
     kind: "markdown",
     name: "",
-    body: "# Settings\n\nPreferences are key and value rows. The Crown block edits display name, email, density, and tips.",
+    body: "# Settings\n\nPreferences are key and value rows. The block edits display name, email, density, and tips.",
    },
    {
     kind: "dataset",
@@ -1117,17 +1433,18 @@ const exampleCatalog: ExampleDef[] = [
     ),
    },
    { kind: "crown", name: "view", body: settingsCrown },
+   { kind: "javascript", name: "view", body: settingsScript },
   ],
  },
  {
   id: "inventory",
   title: "Inventory",
-  summary: "A stock dataset and Crown table that sorts, filters, and edits.",
+  summary: "A stock dataset and a table block that sorts, filters, and edits.",
   blocks: [
    {
     kind: "markdown",
     name: "",
-    body: "# Inventory\n\nThe stock dataset holds the rows, plus the table sort and filters. Run the Crown block to edit them.",
+    body: "# Inventory\n\nThe stock dataset holds the rows, plus the table sort and filters. Run the block to edit them.",
    },
    {
     kind: "dataset",
@@ -1143,6 +1460,7 @@ const exampleCatalog: ExampleDef[] = [
     ),
    },
    { kind: "crown", name: "view", body: inventoryCrown },
+   { kind: "javascript", name: "view", body: inventoryScript },
   ],
  },
 ]
@@ -1151,6 +1469,7 @@ function seedSession(example: ExampleDef): ExampleSession {
  const datasets: Record<string, Dataset> = {}
  let crownName = ""
  let crownSource = ""
+ let scriptSource = ""
  for (const block of example.blocks) {
   if (block.kind === "dataset" && block.name) {
    datasets[block.name] = parseBody(block.body)
@@ -1160,10 +1479,17 @@ function seedSession(example: ExampleDef): ExampleSession {
    crownSource = block.body
   }
  }
+ for (const block of example.blocks) {
+  if (block.kind === "javascript" && block.name === crownName) {
+   scriptSource = block.body
+  }
+ }
  return {
   blocks: example.blocks,
   crownName,
   crownSource,
+  scriptSource,
+  language: "crown",
   datasets,
  }
 }
@@ -1196,6 +1522,14 @@ function sessionFor(example: ExampleDef): ExampleSession {
  if (typeof crown === "string") {
   session.crownSource = crown
  }
+ const script = stored?.scripts?.[session.crownName]
+ if (typeof script === "string") {
+  session.scriptSource = script
+ }
+ const language = stored?.languages?.[session.crownName]
+ if (language === "crown" || language === "javascript") {
+  session.language = language
+ }
  const datasets = stored?.datasets
  if (datasets && typeof datasets === "object") {
   for (const name of Object.keys(session.datasets)) {
@@ -1217,6 +1551,8 @@ function persist(example: ExampleDef, session: ExampleSession) {
  try {
   localStorage.setItem(storagePrefix + example.id, JSON.stringify({
    crowns: { [session.crownName]: session.crownSource },
+   scripts: { [session.crownName]: session.scriptSource },
+   languages: { [session.crownName]: session.language },
    datasets: session.datasets,
   }))
  } catch {
@@ -1233,7 +1569,13 @@ function forget(example: ExampleDef) {
 }
 
 function materialize(session: ExampleSession) {
- return session.blocks.map((block) => {
+ const blocks: { id: string; kind: string; name: string; body: string }[] = []
+ for (const block of session.blocks) {
+  if (block.name === session.crownName && (block.kind === "crown" || block.kind === "javascript")) {
+   if (block.kind !== session.language) {
+    continue
+   }
+  }
   let body = block.body
   if (block.kind === "dataset" && session.datasets[block.name]) {
    body = JSON.stringify(session.datasets[block.name])
@@ -1241,13 +1583,17 @@ function materialize(session: ExampleSession) {
   if (block.kind === "crown" && block.name === session.crownName) {
    body = session.crownSource
   }
-  return {
+  if (block.kind === "javascript" && block.name === session.crownName) {
+   body = session.scriptSource
+  }
+  blocks.push({
    id: crypto.randomUUID(),
    kind: block.kind,
    name: block.name,
    body,
-  }
- })
+  })
+ }
+ return blocks
 }
 
 function pageColumn(ui: ExamplesUi) {
@@ -1286,7 +1632,7 @@ function paintList(page: HTMLElement, ui: ExamplesUi, actions: ExampleActions, r
  chrome(page, ui, actions, "Examples")
  page.append(ui.notice(
   "info",
-  "Open an example to run its Crown against the sample rows. Import as Note saves the Crown and those rows into the selected database. Reset data restores the original sample.",
+  "Open an example to run its block against the sample rows. Import as Note saves that source and those rows into the selected database. Reset data restores the original sample.",
  ))
  for (const example of exampleCatalog) {
   const card = ui.frame()
@@ -1328,16 +1674,19 @@ function paintPreview(
   session.datasets[name] = data
   persist(example, session)
  }
+ function activeSource() {
+  return session.language === "javascript" ? session.scriptSource : session.crownSource
+ }
  function runPreview() {
   const job = tail.then(async () => {
    try {
-    const output = await runtime.run(session.crownSource, session.datasets, writeDataset, () => runPreview())
+    const output = await runtime.run(activeSource(), session.datasets, writeDataset, () => runPreview(), session.language)
     host.replaceChildren()
     if (output instanceof HTMLElement) {
      host.append(output)
      return
     }
-    host.append(ui.notice("info", output == null ? "Crown returned nothing." : String(output)))
+    host.append(ui.notice("info", output == null ? "The block returned nothing." : String(output)))
    } catch (error) {
     host.replaceChildren()
     const message = error instanceof Error ? error.message : String(error)
@@ -1355,19 +1704,25 @@ function paintPreview(
    paintPreview(page, ui, actions, runtime, example)
   },
  })
- const run = ui.button("Run", () => {
-  void runPreview()
- })
- run.setAttribute("data-run", example.id)
  const importNote = ui.button("Import as Note", () => {
   runtime.importExample(example.title, materialize(session))
  })
  importNote.setAttribute("data-import", example.id)
- bar.append(run, importNote)
+ bar.append(importNote)
+ const run = ui.button("Run", () => {
+  void runPreview()
+ })
+ run.setAttribute("data-run", example.id)
+ run.style.alignSelf = "flex-start"
  const hint = ui.text("Ctrl+Enter runs the Crown. Import as Note saves this source and the current rows.")
  hint.style.display = "block"
- const editor = ui.code(session.crownSource, (value) => {
-  session.crownSource = String(value ?? "")
+ const editor = ui.code(activeSource(), (value) => {
+  const text = String(value ?? "")
+  if (session.language === "javascript") {
+   session.scriptSource = text
+  } else {
+   session.crownSource = text
+  }
   persist(example, session)
  }, () => {
   void runPreview()
@@ -1375,7 +1730,19 @@ function paintPreview(
  editor.setAttribute("data-crown", example.id)
  editor.style.minHeight = "14rem"
  editor.style.width = "100%"
- page.append(hint, editor, ui.heading("Preview"), host)
+ const language = ui.choice(session.language, [
+  { value: "crown", label: "Crown" },
+  { value: "javascript", label: "JavaScript" },
+ ], (value: string) => {
+  session.language = value === "javascript" ? "javascript" : "crown"
+  editor.value = activeSource()
+  persist(example, session)
+  void runPreview()
+ })
+ language.setAttribute("data-language", example.id)
+ language.setAttribute("aria-label", "Block language")
+ language.style.alignSelf = "flex-start"
+ page.append(run, hint, language, editor, ui.heading("Preview"), host)
  void runPreview()
 }
 
@@ -1413,13 +1780,13 @@ export function paintHome(
  page.append(
   ui.heading("Home"),
   ui.markdown("Civil Grone is a local-first database and notebook."),
-  ui.markdown("Databases opens a SQLite file on this machine or connects a Turso database. Browse tables, sort and filter rows, and run SQL."),
+  ui.markdown("Tables shows the tables in the selected database. Browse rows, sort and filter, and run SQL."),
   ui.markdown("Notes live in the selected database. A note mixes markdown with SQL, Crown, and JavaScript blocks that pass datasets along a pipeline."),
-  ui.markdown("Examples are Grone notes you can preview here or import. Each one is a sample dataset plus Crown that builds the interface."),
+  ui.markdown("Examples are Grone notes you can preview here or import. Each one is a sample dataset plus Crown or JavaScript that builds the interface."),
  )
  const links = ui.row()
  links.append(
-  ui.button("Databases", actions.databases),
+  ui.button("Tables", actions.databases),
   ui.button("Notes", actions.notes),
   ui.button("Examples", actions.examples),
  )

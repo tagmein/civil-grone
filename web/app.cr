@@ -100,7 +100,7 @@ function [
  call [ get about, at panel ] [ get lead ]
  get ui
  at markdown
- call 'Databases opens a SQLite file on this machine or connects a Turso database. Browse tables, sort and filter rows, and run SQL.'
+ call 'Tables shows the tables in the selected database. Browse rows, sort and filter, and run SQL.'
  to databasesCopy
  get ui
  at append
@@ -369,7 +369,7 @@ function [
  call [ get shell, at tray ] [ get homeButton ]
  get ui
  at button
- call Databases [ function [
+ call Tables [ function [
   get visit
   call databases '' push
  ] ]
@@ -934,9 +934,16 @@ try [
   set state section notes
   set state routeNoteId [ get route, at noteId ]
  ]
+ get route
+ at section
+ is examples
+ true [
+  set state section examples
+  set state example [ get route, at example ]
+ ]
  get starry
  at writeRoute
- call [ get state, at section ] [ get state, at routeNoteId ] '' replace
+ call [ get state, at section ] [ get state, at routeNoteId ] [ get state, at example ] replace
  get starry
  at onRoute
  call [ get applyRoute ]

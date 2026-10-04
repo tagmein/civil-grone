@@ -95,6 +95,162 @@ export function stampBaseline<T extends { rows?: unknown[][] }>(dataset: T) {
  }
 }
 
+export const datasetColumnTypes = ["TEXT", "INTEGER", "REAL", "BOOLEAN", "NUMERIC", "BLOB"]
+
+export function canonicalColumnType(type: unknown) {
+ const text = String(type ?? "").trim().toUpperCase()
+ if (!text || text === "STRING" || text === "VARCHAR" || text === "CHAR") {
+  return "TEXT"
+ }
+ if (text === "INT" || text === "INTEGER") {
+  return "INTEGER"
+ }
+ if (text === "BOOL" || text === "BOOLEAN") {
+  return "BOOLEAN"
+ }
+ if (text === "FLOAT" || text === "DOUBLE" || text === "REAL") {
+  return "REAL"
+ }
+ if (text === "NUMBER" || text === "NUMERIC" || text === "DECIMAL") {
+  return "NUMERIC"
+ }
+ if (text === "BLOB") {
+  return "BLOB"
+ }
+ return text
+}
+
+export function integerBase(value: unknown) {
+ const text = String(value ?? "").trim()
+ if (!/^\d+$/.test(text)) {
+  return null
+ }
+ const base = Number(text)
+ if (base < 2 || base > 36) {
+  return null
+ }
+ return base
+}
+
+export function migrateColumnValue(value: unknown, fromType: unknown, toType: unknown, base: number) {
+ const from = canonicalColumnType(fromType)
+ const to = canonicalColumnType(toType)
+ if (from === to) {
+  return value
+ }
+ if (value == null) {
+  return ""
+ }
+ const text = String(value).trim()
+ if (text === "") {
+  return ""
+ }
+ if (to === "INTEGER") {
+  const parsed = parseInt(text, base)
+  return Number.isNaN(parsed) ? value : parsed
+ }
+ if (to === "REAL" || to === "NUMERIC") {
+  const parsed = Number(text)
+  return Number.isFinite(parsed) ? parsed : value
+ }
+ if (to === "BOOLEAN") {
+  const lower = text.toLowerCase()
+  if (lower === "true" || lower === "yes" || lower === "1") {
+   return true
+  }
+  if (lower === "false" || lower === "no" || lower === "0") {
+   return false
+  }
+  return value
+ }
+ if (to === "TEXT" || to === "BLOB") {
+  return String(value)
+ }
+ return value
+}
+
+export type ColumnDraft = {
+ name: string
+ type: string
+ from: number
+ migrate?: boolean
+ base?: string | number
+}
+
+function remapColumnKey<T extends { column: string }>(items: T[] | undefined, rename: Map<string, string>) {
+ const next: T[] = []
+ for (const item of items ?? []) {
+  const name = rename.get(item.column)
+  if (!name) {
+   continue
+  }
+  next.push({ ...item, column: name })
+ }
+ return next
+}
+
+function draftedCell(source: unknown[], draft: ColumnDraft, priorType: unknown) {
+ const from = typeof draft?.from === "number" ? draft.from : -1
+ const raw = from >= 0 ? source[from] ?? "" : ""
+ if (!draft?.migrate || from < 0) {
+  return raw
+ }
+ const base = integerBase(draft.base) ?? 10
+ return migrateColumnValue(raw, priorType, draft.type, base)
+}
+
+export function applyDatasetColumns(dataset: DatasetLike, drafts: ColumnDraft[]) {
+ const previous = dataset?.columns ?? []
+ const rename = new Map<string, string>()
+ dataset.columns = (drafts ?? []).map((draft) => {
+  const name = String(draft?.name ?? "").trim()
+  const type = String(draft?.type ?? "").trim()
+  const from = typeof draft?.from === "number" ? draft.from : -1
+  const prior = from >= 0 ? previous[from] : undefined
+  if (prior?.name) {
+   rename.set(String(prior.name), name)
+  }
+  const column: DatasetColumn = prior ? { ...prior, name } : { name }
+  if (type) {
+   column.type = type
+  } else {
+   delete column.type
+  }
+  return column
+ })
+ const project = (row: unknown[]) => (drafts ?? []).map((draft) => {
+  const from = typeof draft?.from === "number" ? draft.from : -1
+  return draftedCell(row, draft, from >= 0 ? previous[from]?.type : "")
+ })
+ dataset.rows = (dataset.rows ?? []).map((row) => project(Array.isArray(row) ? row : []))
+ dataset.sort = remapColumnKey(dataset.sort, rename)
+ dataset.filters = remapColumnKey(dataset.filters, rename)
+ if (Array.isArray(dataset.baseline)) {
+  dataset.baseline = dataset.baseline.map((row) => {
+   if (!Array.isArray(row)) {
+    return null
+   }
+   return project(row)
+  })
+ }
+ if (Array.isArray(dataset.pinned)) {
+  dataset.pinned = dataset.pinned.map((names) => {
+   if (!Array.isArray(names)) {
+    return []
+   }
+   const next: string[] = []
+   for (const name of names) {
+    const renamed = rename.get(String(name))
+    if (renamed) {
+     next.push(renamed)
+    }
+   }
+   return next
+  })
+ }
+ return dataset
+}
+
 function columnName(column: DatasetColumn | undefined, index: number) {
  const name = String(column?.name ?? "").trim()
  return name || `column${index + 1}`

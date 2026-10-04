@@ -5,8 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Civil Grone</title>
 <link rel="icon" href="/favicon.ico" type="image/x-icon">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#000000">
 </head>
 <body>
+<script>
+if ("serviceWorker" in navigator) {
+ navigator.serviceWorker.register("/sw.js")
+}
+</script>
 <script type="module">
 globalThis.import = (specifier) => import(specifier)
 const { crown } = await import("/crown.mjs")

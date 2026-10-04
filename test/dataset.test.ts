@@ -1,10 +1,13 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import {
+ applyDatasetColumns,
  applySelect,
  conflictView,
+ integerBase,
  listDatasetConflicts,
  mergeDatasetRefresh,
+ migrateColumnValue,
  stampBaseline,
  writeSelectColumn,
  writeSelectFilter,
@@ -149,4 +152,34 @@ test("select keeps rows from the previous dataset", () => {
  assert.deepEqual(JSON.parse(body).columns, ["id", "customer_id"])
  const filtered = writeSelectFilter(body, { column: "total", op: "gt", value: "8" })
  assert.equal(JSON.parse(filtered).filters[0].value, "8")
+})
+
+test("integer migration parses text in the chosen base", () => {
+ assert.equal(integerBase("10"), 10)
+ assert.equal(integerBase("1"), null)
+ assert.equal(integerBase("37"), null)
+ assert.equal(migrateColumnValue("42", "text", "INTEGER", 10), 42)
+ assert.equal(migrateColumnValue("ff", "TEXT", "integer", 16), 255)
+ assert.equal(migrateColumnValue("1010", "text", "INTEGER", 2), 10)
+ assert.equal(migrateColumnValue("", "text", "INTEGER", 10), "")
+ assert.equal(migrateColumnValue("nope", "text", "INTEGER", 10), "nope")
+ const dataset = {
+  columns: [{ name: "qty", type: "text" }, { name: "sku", type: "text" }],
+  rows: [["24", "A1"], ["ff", "B2"]],
+  sort: [{ column: "qty", direction: "asc" }],
+  filters: [],
+  baseline: [["24", "A1"], ["ff", "B2"]],
+ }
+ applyDatasetColumns(dataset, [
+  { name: "qty", type: "INTEGER", from: 0, migrate: true, base: 16 },
+  { name: "sku", type: "text", from: 1 },
+ ])
+ assert.equal(dataset.columns[0].type, "INTEGER")
+ assert.deepEqual(dataset.rows, [[36, "A1"], [255, "B2"]])
+ assert.deepEqual(dataset.baseline, [[36, "A1"], [255, "B2"]])
+ applyDatasetColumns(dataset, [
+  { name: "qty", type: "INTEGER", from: 0 },
+  { name: "sku", type: "TEXT", from: 1 },
+ ])
+ assert.deepEqual(dataset.rows, [[36, "A1"], [255, "B2"]])
 })
