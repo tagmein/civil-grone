@@ -33,11 +33,12 @@ import { table } from "../starryui/packages/table/index.ts"
 import { tabs } from "../starryui/packages/tabs/index.ts"
 import {
  applyTheme,
+ applyThemeDensity,
  attachStyle,
  attachThemeFacetStyle,
- useThemeDimensions,
  type StarryUITheme,
  type StarryUIThemeFacet,
+ type ThemeDensity,
 } from "../starryui/packages/theme/index.ts"
 import { themeBrilliance } from "../starryui/packages/theme-brilliance/index.ts"
 import { themeMidnight } from "../starryui/packages/theme-midnight/index.ts"
@@ -115,7 +116,37 @@ function guard(fn: unknown) {
 
 const allThemes = [themeBrilliance, themeMidnight, themeSandstone]
 const themeNameStorageKey = "theme"
+const densityStorageKey = "density"
 let activeTheme = themeMidnight
+let activeDensity: ThemeDensity = "comfortable"
+
+function preferredDensity(): ThemeDensity {
+ try {
+  const stored = localStorage.getItem(densityStorageKey)
+  if (stored === "compact" || stored === "comfortable") {
+   return stored
+  }
+ } catch (error) {
+  console.error(error)
+ }
+ return "comfortable"
+}
+
+export function density() {
+ return activeDensity
+}
+
+export function setDensity(value: unknown) {
+ const next: ThemeDensity = value === "compact" || value === "comfortable" ? value : activeDensity
+ activeDensity = next
+ try {
+  localStorage.setItem(densityStorageKey, next)
+ } catch (error) {
+  console.error(error)
+ }
+ applyThemeDensity(next)
+ return next
+}
 let bodyVariableStyle: HTMLStyleElement | undefined
 let bodyFacetStyle: HTMLStyleElement | undefined
 
@@ -208,8 +239,9 @@ function applyAppTheme(theme: StarryUITheme, extras: readonly HTMLElement[] = []
 
 export function shell(theme = preferredTheme()) {
  activeTheme = resolveTheme(theme)
+ activeDensity = preferredDensity()
  paintBody(activeTheme)
- useThemeDimensions.tiny()
+ applyThemeDensity(activeDensity)
  const ui = createUi(activeTheme)
  const trayElement = ui.tray()
  const status = document.createElement("div")
@@ -1745,6 +1777,13 @@ export function previousColumns(blocks: { kind?: string; body?: string; output?:
 
 export function mark(element: HTMLElement, name: string, value: string) {
  element?.setAttribute(String(name), value == null ? "" : String(value))
+ return element
+}
+
+export function press(element: HTMLElement, current: unknown, name: unknown) {
+ const on = String(current ?? "") === String(name ?? "")
+ element?.setAttribute("data-pressed", on ? "1" : "0")
+ element?.setAttribute("aria-pressed", on ? "true" : "false")
  return element
 }
 

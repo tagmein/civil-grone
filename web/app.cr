@@ -59,6 +59,7 @@ set state [ object [
  totpUri ''
  totpCode ''
  inviteUsername ''
+ settingsDialog null
 ] ]
 
 get starry
@@ -134,6 +135,113 @@ function [
  call
 ]
 to openAbout
+
+function panel [
+ get ui
+ at clear
+ call [ get panel ]
+ get ui
+ at column
+ call
+ to page
+ set page style gap 'var(--dimension3)'
+ get ui
+ at text
+ call Density
+ to densityLabel
+ get ui
+ at append
+ call [ get page ] [ get densityLabel ]
+ get ui
+ at line
+ call
+ to densityLine
+ get starry
+ at density
+ call
+ to current
+ get ui
+ at button
+ call Comfortable [ function [
+  get starry
+  at setDensity
+  call comfortable
+  get paintInterface
+  call [ get panel ]
+ ] ]
+ to comfortableButton
+ get starry
+ at press
+ call [ get comfortableButton ] [ get current ] comfortable
+ get ui
+ at append
+ call [ get densityLine ] [ get comfortableButton ]
+ get ui
+ at button
+ call Compact [ function [
+  get starry
+  at setDensity
+  call compact
+  get paintInterface
+  call [ get panel ]
+ ] ]
+ to compactButton
+ get starry
+ at press
+ call [ get compactButton ] [ get current ] compact
+ get ui
+ at append
+ call [ get densityLine ] [ get compactButton ]
+ get ui
+ at append
+ call [ get page ] [ get densityLine ]
+ get ui
+ at append
+ call [ get panel ] [ get page ]
+]
+to paintInterface
+
+function [
+ get state
+ at settingsDialog
+ is null
+ true [
+  get ui
+  at dialog
+  call Settings
+  to settings
+  set state settingsDialog [ get settings ]
+  get ui
+  at tabs
+  call [ list [ object [
+   id interface
+   title Interface
+  ] ] ] interface
+  to settingsTabs
+  get ui
+  at append
+  call [ get settings, at panel ] [ get settingsTabs, at element ]
+  get paintInterface
+  call [ get settingsTabs, at panel ]
+  get ui
+  at button
+  call Close [ function [
+   get state
+   at settingsDialog
+   at close
+   call
+  ] ]
+  to closeSettings
+  get ui
+  at append
+  call [ get settings, at panel ] [ get closeSettings ]
+ ]
+ get state
+ at settingsDialog
+ at open
+ call
+]
+to openSettings
 
 function [
  get ui
@@ -335,6 +443,16 @@ function [
  get ui
  at append
  call [ get shell, at tray ] [ get themeButton ]
+ get ui
+ at button
+ call Settings [ function [
+  get openSettings
+  call
+ ] ]
+ to settingsButton
+ get ui
+ at append
+ call [ get shell, at tray ] [ get settingsButton ]
  get state
  at user
  is null
